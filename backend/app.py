@@ -12,11 +12,14 @@ from auth import (
 )
 from decorators import (
     get_current_user, require_auth, require_permission,
-    has_permission, log_operation, log_exceptions
+    has_permission, log_operation, log_operation_direct, log_exceptions
 )
 from gateway_sync import get_sync_client, sync_call, GatewayError
 from settings import settings
 from logger import setup_logging, get_logger, log_error
+from model_manager import model_manager, PROVIDER_TEMPLATES
+from channel_manager import channel_manager, CHANNEL_TYPES
+from config_sync import config_sync
 import subprocess
 import json
 from datetime import datetime, timedelta
@@ -140,7 +143,7 @@ def login():
         )
 
         # 记录登录日志
-        log_operation('login', 'user', str(user['id']))
+        log_operation_direct('login', 'user', str(user['id']))
 
         return jsonify({
             'success': True,
@@ -166,7 +169,7 @@ def login():
 def logout():
     """用户登出"""
     user = get_current_user()
-    log_operation('logout', 'user', str(user['user_id']))
+    log_operation_direct('logout', 'user', str(user['user_id']))
     return jsonify({'success': True, 'message': '登出成功'})
 
 
@@ -252,7 +255,7 @@ def change_password():
         new_hash = hash_password(new_password)
         db.update('users', {'password_hash': new_hash}, 'id = ?', (user['user_id'],))
 
-        log_operation('change_password', 'user', str(user['user_id']))
+        log_operation_direct('change_password', 'user', str(user['user_id']))
 
         return jsonify({'success': True, 'message': '密码已修改'})
     except Exception as e:
@@ -311,7 +314,7 @@ def create_user():
             'is_active': 1
         })
 
-        log_operation('create_user', 'user', str(user_id), json.dumps({'username': username, 'role_id': role_id}))
+        log_operation_direct('create_user', 'user', str(user_id), json.dumps({'username': username, 'role_id': role_id}))
 
         return jsonify({
             'success': True,
@@ -352,7 +355,7 @@ def update_user(user_id):
         if update_data:
             update_data['updated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             db.update('users', update_data, 'id = ?', (user_id,))
-            log_operation('update_user', 'user', str(user_id), json.dumps(update_data))
+            log_operation_direct('update_user', 'user', str(user_id), json.dumps(update_data))
 
         return jsonify({'success': True, 'message': '用户已更新'})
     except Exception as e:
@@ -375,7 +378,7 @@ def delete_user(user_id):
             return jsonify({'success': False, 'error': '不能删除默认管理员'}), 400
 
         db.delete('users', 'id = ?', (user_id,))
-        log_operation('delete_user', 'user', str(user_id))
+        log_operation_direct('delete_user', 'user', str(user_id))
 
         return jsonify({'success': True, 'message': '用户已删除'})
     except Exception as e:
@@ -412,7 +415,7 @@ def update_role(role_id):
 
         if update_data:
             db.update('roles', update_data, 'id = ?', (role_id,))
-            log_operation('update_role', 'role', str(role_id), json.dumps(update_data))
+            log_operation_direct('update_role', 'role', str(role_id), json.dumps(update_data))
 
         return jsonify({'success': True, 'message': '角色已更新'})
     except Exception as e:
@@ -501,7 +504,7 @@ def create_agent():
         result = sync_call('agents.create', params)
         agent = result.get('agent', {})
 
-        log_operation('create_agent', 'agent', agent.get('id'), json.dumps({'name': name}))
+        log_operation_direct('create_agent', 'agent', agent.get('id'), json.dumps({'name': name}))
 
         return jsonify({
             'success': True,
@@ -536,7 +539,7 @@ def update_agent(agent_id):
         result = sync_call('agents.update', params)
         agent = result.get('agent', {})
 
-        log_operation('update_agent', 'agent', agent_id)
+        log_operation_direct('update_agent', 'agent', agent_id)
 
         return jsonify({
             'success': True,
@@ -571,7 +574,7 @@ def delete_agent(agent_id):
             'deleteFiles': True
         })
 
-        log_operation('delete_agent', 'agent', agent_id)
+        log_operation_direct('delete_agent', 'agent', agent_id)
         return jsonify({'success': True, 'message': f'Agent {agent_id} 已删除'})
     except GatewayError as e:
         return jsonify({'success': False, 'error': f'Gateway 错误: {e.message}'}), 500
@@ -590,14 +593,14 @@ def apply_config():
         )
 
         if result.returncode == 0:
-            log_operation('apply_config', 'gateway')
+            log_operation_direct('apply_config', 'gateway')
             return jsonify({'success': True, 'message': 'Gateway 已重启，配置已生效'})
         else:
             return jsonify({'success': False, 'error': result.stderr or 'Gateway 重启失败'}), 500
     except subprocess.TimeoutExpired:
         return jsonify({'success': False, 'error': 'Gateway 重启超时'}), 500
     except FileNotFoundError:
-        log_operation('apply_config', 'gateway')
+        log_operation_direct('apply_config', 'gateway')
         return jsonify({'success': True, 'message': '模拟重启成功'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -647,7 +650,7 @@ def create_binding():
         patch_raw = json5.dumps({'bindings': config['bindings']})
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
-        log_operation('create_binding', 'binding', None, json.dumps(data))
+        log_operation_direct('create_binding', 'binding', None, json.dumps(data))
         return jsonify({'success': True, 'data': data, 'message': '绑定创建成功'})
     except GatewayError as e:
         return jsonify({'success': False, 'error': f'Gateway 错误: {e.message}'}), 500
@@ -683,7 +686,7 @@ def update_binding(index):
         patch_raw = json5.dumps({'bindings': bindings})
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
-        log_operation('update_binding', 'binding', index, json.dumps(data))
+        log_operation_direct('update_binding', 'binding', index, json.dumps(data))
         return jsonify({'success': True, 'data': data, 'message': '绑定更新成功'})
     except GatewayError as e:
         return jsonify({'success': False, 'error': f'Gateway 错误: {e.message}'}), 500
@@ -713,7 +716,7 @@ def delete_binding(index):
         patch_raw = json5.dumps({'bindings': bindings})
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
-        log_operation('delete_binding', 'binding', index, json.dumps(deleted))
+        log_operation_direct('delete_binding', 'binding', index, json.dumps(deleted))
         return jsonify({'success': True, 'message': '绑定删除成功'})
     except GatewayError as e:
         return jsonify({'success': False, 'error': f'Gateway 错误: {e.message}'}), 500
@@ -758,7 +761,7 @@ def reorder_bindings():
         patch_raw = json5.dumps({'bindings': bindings})
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
-        log_operation('reorder_bindings', 'binding', None, json.dumps(data))
+        log_operation_direct('reorder_bindings', 'binding', None, json.dumps(data))
         return jsonify({'success': True, 'message': '绑定顺序已更新'})
     except GatewayError as e:
         return jsonify({'success': False, 'error': f'Gateway 错误: {e.message}'}), 500
@@ -830,7 +833,7 @@ def set_default_agent():
         })
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
-        log_operation('set_default_agent', 'binding', None, json.dumps({'agentId': agent_id}))
+        log_operation_direct('set_default_agent', 'binding', None, json.dumps({'agentId': agent_id}))
         return jsonify({'success': True, 'message': f'默认 Agent 已设置为 {agent_id}'})
     except GatewayError as e:
         return jsonify({'success': False, 'error': f'Gateway 错误: {e.message}'}), 500
@@ -1079,7 +1082,7 @@ def update_channel(channel_name):
         patch_raw = json5.dumps({'channels': channels_config})
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
-        log_operation('update_channel', 'channel', channel_name, json.dumps(data))
+        log_operation_direct('update_channel', 'channel', channel_name, json.dumps(data))
         return jsonify({'success': True, 'message': f'渠道 {channel_name} 配置已更新'})
     except GatewayError as e:
         return jsonify({'success': False, 'error': f'Gateway 错误: {e.message}'}), 500
@@ -1126,7 +1129,7 @@ def create_channel_account(channel_name):
         patch_raw = json5.dumps({'channels': channels_config})
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
-        log_operation('create_channel_account', 'channel', f'{channel_name}/{account_id}', json.dumps(data))
+        log_operation_direct('create_channel_account', 'channel', f'{channel_name}/{account_id}', json.dumps(data))
         return jsonify({'success': True, 'message': f'账号 {account_id} 创建成功'})
     except GatewayError as e:
         return jsonify({'success': False, 'error': f'Gateway 错误: {e.message}'}), 500
@@ -1179,7 +1182,7 @@ def update_channel_account(channel_name, account_id):
         patch_raw = json5.dumps({'channels': channels_config})
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
-        log_operation('update_channel_account', 'channel', f'{channel_name}/{account_id}', json.dumps({'updated': True}))
+        log_operation_direct('update_channel_account', 'channel', f'{channel_name}/{account_id}', json.dumps({'updated': True}))
         return jsonify({'success': True, 'message': f'账号 {account_id} 更新成功'})
     except GatewayError as e:
         return jsonify({'success': False, 'error': f'Gateway 错误: {e.message}'}), 500
@@ -1216,7 +1219,7 @@ def delete_channel_account(channel_name, account_id):
         patch_raw = json5.dumps({'channels': channels_config})
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
-        log_operation('delete_channel_account', 'channel', f'{channel_name}/{account_id}', json.dumps({'deleted': True}))
+        log_operation_direct('delete_channel_account', 'channel', f'{channel_name}/{account_id}', json.dumps({'deleted': True}))
         return jsonify({'success': True, 'message': f'账号 {account_id} 已删除'})
     except GatewayError as e:
         return jsonify({'success': False, 'error': f'Gateway 错误: {e.message}'}), 500
@@ -1226,10 +1229,142 @@ def delete_channel_account(channel_name, account_id):
 
 # ==================== 模型 API（受保护） ====================
 
+@app.route('/api/models/providers', methods=['GET'])
+@require_permission('models', 'read')
+def get_model_providers():
+    """获取模型提供商模板"""
+    try:
+        providers = model_manager.get_providers()
+        return jsonify({'success': True, 'data': providers})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/models/providers/<provider_id>/models', methods=['GET'])
+@require_permission('models', 'read')
+def get_provider_models(provider_id):
+    """获取指定提供商的模型列表"""
+    try:
+        models = model_manager.get_provider_models(provider_id)
+        return jsonify({'success': True, 'data': models})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/models', methods=['GET'])
 @require_permission('models', 'read')
 def get_models():
-    """获取可用模型列表 - 通过 WebSocket"""
+    """获取所有模型配置"""
+    try:
+        # 从本地数据库获取模型配置
+        models = model_manager.list_models()
+        return jsonify({'success': True, 'data': models})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/models', methods=['POST'])
+@require_permission('models', 'write')
+@log_operation('创建模型', 'model')
+def create_model():
+    """创建模型配置"""
+    try:
+        data = request.get_json()
+
+        # 验证必填字段
+        required_fields = ['name', 'provider', 'model_name']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({'success': False, 'error': f'{field} 为必填字段'}), 400
+
+        # 创建模型
+        model = model_manager.create_model(data)
+
+        logger.info(f'创建模型成功: {model["id"]} - {model["name"]}')
+        return jsonify({'success': True, 'data': model})
+
+    except Exception as e:
+        logger.error(f'创建模型失败: {str(e)}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/models/<model_id>', methods=['GET'])
+@require_permission('models', 'read')
+def get_model(model_id):
+    """获取单个模型配置"""
+    try:
+        model = model_manager.get_model(model_id)
+        if not model:
+            return jsonify({'success': False, 'error': '模型不存在'}), 404
+
+        return jsonify({'success': True, 'data': model})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/models/<model_id>', methods=['PUT'])
+@require_permission('models', 'write')
+@log_operation('更新模型', 'model')
+def update_model(model_id):
+    """更新模型配置"""
+    try:
+        data = request.get_json()
+
+        # 更新模型
+        model = model_manager.update_model(model_id, data)
+        if not model:
+            return jsonify({'success': False, 'error': '模型不存在'}), 404
+
+        logger.info(f'更新模型成功: {model_id} - {model["name"]}')
+        return jsonify({'success': True, 'data': model})
+
+    except Exception as e:
+        logger.error(f'更新模型失败: {str(e)}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/models/<model_id>', methods=['DELETE'])
+@require_permission('models', 'delete')
+@log_operation('删除模型', 'model')
+def delete_model(model_id):
+    """删除模型配置"""
+    try:
+        success = model_manager.delete_model(model_id)
+        if not success:
+            return jsonify({'success': False, 'error': '模型不存在'}), 404
+
+        logger.info(f'删除模型成功: {model_id}')
+        return jsonify({'success': True, 'message': '模型已删除'})
+
+    except Exception as e:
+        logger.error(f'删除模型失败: {str(e)}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/models/<model_id>/test', methods=['POST'])
+@require_permission('models', 'read')
+@log_operation('测试模型连接', 'model')
+def test_model_connection(model_id):
+    """测试模型 API 连通性"""
+    try:
+        result = model_manager.test_connection(model_id)
+
+        if result['connected']:
+            logger.info(f'模型测试成功: {model_id}, 响应时间: {result.get("response_time")}ms')
+        else:
+            logger.warning(f'模型测试失败: {model_id}, 错误: {result.get("error")}')
+
+        return jsonify({'success': True, 'data': result})
+
+    except Exception as e:
+        logger.error(f'模型测试异常: {str(e)}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/models/gateway', methods=['GET'])
+@require_permission('models', 'read')
+def get_gateway_models():
+    """获取 Gateway 模型列表（用于同步）"""
     try:
         result = sync_call('models.list')
         models = result.get('models', [])
@@ -1264,6 +1399,181 @@ def get_full_config():
         return jsonify({'success': True, 'data': config, 'permissions': {'can_edit': can_edit}})
     except GatewayError as e:
         return jsonify({'success': False, 'error': f'Gateway 错误: {e.message}'}), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/config/preview', methods=['GET'])
+@require_permission('config', 'read')
+def get_config_preview():
+    """获取配置预览（JSON 格式）"""
+    try:
+        import json5
+
+        # 从 Gateway 获取配置
+        result = sync_call('config.get')
+        config = result.get('config', {})
+
+        # 移除敏感信息
+        def mask_secrets(obj, path=''):
+            if isinstance(obj, dict):
+                for key in list(obj.keys()):
+                    if any(s in key.lower() for s in ['secret', 'key', 'token', 'password']):
+                        obj[key] = '********'
+                    else:
+                        mask_secrets(obj[key], f'{path}.{key}')
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    mask_secrets(item, f'{path}[{i}]')
+
+        config_copy = json.loads(json.dumps(config))
+        mask_secrets(config_copy)
+
+        # 格式化 JSON
+        json_str = json.dumps(config_copy, indent=2, ensure_ascii=False)
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'json': json_str,
+                'hash': result.get('hash', '')
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/config/check', methods=['GET'])
+@require_permission('config', 'read')
+def check_config():
+    """检查配置完整性"""
+    try:
+        result = sync_call('config.get')
+        config = result.get('config', {})
+    except Exception as e:
+        return jsonify({
+            'success': True,
+            'data': {
+                'score': 0,
+                'checks': [],
+                'warnings': [{'field': 'gateway', 'message': f'无法连接 Gateway: {str(e)}', 'severity': 'warning'}],
+                'errors': [{'field': 'gateway', 'message': 'Gateway 连接失败', 'severity': 'error'}],
+                'complete': False
+            }
+        })
+
+    try:
+        checks = []
+        warnings = []
+        errors = []
+
+        # 检查模型配置
+        models = config.get('models', {})
+        if not models:
+            errors.append({
+                'field': 'models',
+                'message': '未配置任何模型',
+                'severity': 'error'
+            })
+        else:
+            checks.append({
+                'field': 'models',
+                'message': f'已配置 {len(models)} 个模型',
+                'status': 'ok'
+            })
+
+        # 检查 Agent 配置
+        agents_config = config.get('agents', {})
+        # agents 可能是 dict 也可能是 list
+        if isinstance(agents_config, list):
+            agents = agents_config
+        else:
+            agents = agents_config.get('list', [])
+
+        if not agents:
+            errors.append({
+                'field': 'agents',
+                'message': '未配置任何 Agent',
+                'severity': 'error'
+            })
+        else:
+            checks.append({
+                'field': 'agents',
+                'message': f'已配置 {len(agents)} 个 Agent',
+                'status': 'ok'
+            })
+
+            # 检查 Agent 的模型配置
+            for agent in agents:
+                agent_id = agent.get('id', 'unknown')
+                model = agent.get('model', {})
+                if not model:
+                    warnings.append({
+                        'field': f'agents.{agent_id}.model',
+                        'message': f'Agent "{agent_id}" 未配置模型',
+                        'severity': 'warning'
+                    })
+
+        # 检查渠道配置
+        channels = config.get('channels', {})
+        enabled_channels = [k for k, v in channels.items() if v.get('enabled', True)]
+        if not enabled_channels:
+            warnings.append({
+                'field': 'channels',
+                'message': '未启用任何渠道',
+                'severity': 'warning'
+            })
+        else:
+            checks.append({
+                'field': 'channels',
+                'message': f'已启用 {len(enabled_channels)} 个渠道',
+                'status': 'ok'
+            })
+
+            # 检查渠道账号配置
+            for channel_name, channel_config in channels.items():
+                accounts = channel_config.get('accounts', {})
+                if not accounts:
+                    warnings.append({
+                        'field': f'channels.{channel_name}.accounts',
+                        'message': f'渠道 "{channel_name}" 未配置账号',
+                        'severity': 'warning'
+                    })
+
+        # 检查绑定配置
+        bindings_config = config.get('bindings', {})
+        if isinstance(bindings_config, list):
+            bindings = bindings_config
+        else:
+            bindings = bindings_config.get('rules', [])
+        if not bindings:
+            warnings.append({
+                'field': 'bindings',
+                'message': '未配置绑定规则，消息将发送给默认 Agent',
+                'severity': 'warning'
+            })
+        else:
+            checks.append({
+                'field': 'bindings',
+                'message': f'已配置 {len(bindings)} 条绑定规则',
+                'status': 'ok'
+            })
+
+        # 计算完整性分数
+        total_checks = 4  # models, agents, channels, bindings
+        passed_checks = len([c for c in checks if c['status'] == 'ok'])
+        score = int((passed_checks / total_checks) * 100)
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'score': score,
+                'checks': checks,
+                'warnings': warnings,
+                'errors': errors,
+                'complete': len(errors) == 0
+            }
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -1303,14 +1613,14 @@ def gateway_restart():
         )
 
         if result.returncode == 0:
-            log_operation('gateway_restart', 'gateway')
+            log_operation_direct('gateway_restart', 'gateway')
             return jsonify({'success': True, 'message': 'Gateway 已重启'})
         else:
             return jsonify({'success': False, 'error': result.stderr or 'Gateway 重启失败'}), 500
     except subprocess.TimeoutExpired:
         return jsonify({'success': False, 'error': 'Gateway 重启超时'}), 500
     except FileNotFoundError:
-        log_operation('gateway_restart', 'gateway')
+        log_operation_direct('gateway_restart', 'gateway')
         return jsonify({'success': True, 'message': '模拟重启成功'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -1327,14 +1637,14 @@ def gateway_reload():
         )
 
         if result.returncode == 0:
-            log_operation('gateway_reload', 'gateway')
+            log_operation_direct('gateway_reload', 'gateway')
             return jsonify({'success': True, 'message': '配置已重新加载'})
         else:
             return jsonify({'success': False, 'error': result.stderr or '配置加载失败'}), 500
     except subprocess.TimeoutExpired:
         return jsonify({'success': False, 'error': '配置加载超时'}), 500
     except FileNotFoundError:
-        log_operation('gateway_reload', 'gateway')
+        log_operation_direct('gateway_reload', 'gateway')
         return jsonify({'success': True, 'message': '模拟加载成功'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -1837,7 +2147,7 @@ def update_config_file(file_id):
             'content': content
         })
 
-        log_operation('update_config_file', 'config_file', file_id)
+        log_operation_direct('update_config_file', 'config_file', file_id)
         return jsonify({'success': True, 'message': '文件已保存'})
     except GatewayError as e:
         return jsonify({'success': False, 'error': f'Gateway 错误: {e.message}'}), 500
@@ -1921,7 +2231,7 @@ def create_config_template():
             'is_builtin': 0
         })
 
-        log_operation('create_template', 'template', template_id)
+        log_operation_direct('create_template', 'template', template_id)
         return jsonify({'success': True, 'message': '模板创建成功'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -1975,7 +2285,7 @@ def update_config_template(template_id):
             update_data['content'] = data['content']
 
         db.update('templates', update_data, 'template_id = ?', (template_id,))
-        log_operation('update_template', 'template', template_id)
+        log_operation_direct('update_template', 'template', template_id)
 
         return jsonify({'success': True, 'message': '模板已更新'})
     except Exception as e:
@@ -1995,7 +2305,7 @@ def delete_config_template(template_id):
             return jsonify({'success': False, 'error': '内置模板不能删除'}), 400
 
         db.delete('templates', 'template_id = ?', (template_id,))
-        log_operation('delete_template', 'template', template_id)
+        log_operation_direct('delete_template', 'template', template_id)
 
         return jsonify({'success': True, 'message': '模板已删除'})
     except Exception as e:
@@ -2332,7 +2642,7 @@ def soul_inject():
 
             injected.append(agent_id)
 
-        log_operation('soul_inject', 'config_files', f"{file_type}.md", json.dumps({
+        log_operation_direct('soul_inject', 'config_files', f"{file_type}.md", json.dumps({
             'fileType': file_type,
             'mode': mode,
             'injected': injected,
@@ -3040,7 +3350,7 @@ def toggle_skill(skill_slug):
         # 使用 patch 方法更新
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
-        log_operation('toggle_skill', 'skill', skill_slug, json.dumps({'enabled': enabled}))
+        log_operation_direct('toggle_skill', 'skill', skill_slug, json.dumps({'enabled': enabled}))
         return jsonify({'success': True, 'message': f'Skill {skill_slug} 已{"启用" if enabled else "禁用"}'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3075,7 +3385,7 @@ def update_skill_config(skill_slug):
         # 使用 patch 方法更新
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
-        log_operation('update_skill_config', 'skill', skill_slug, json.dumps(data))
+        log_operation_direct('update_skill_config', 'skill', skill_slug, json.dumps(data))
         return jsonify({'success': True, 'message': f'Skill {skill_slug} 配置已更新'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3127,7 +3437,7 @@ description: {description}
         with open(skill_dir / 'SKILL.md', 'w', encoding='utf-8') as f:
             f.write(skill_md_content)
 
-        log_operation('create_skill', 'skill', name, json.dumps({'location': location, 'agentId': agent_id}))
+        log_operation_direct('create_skill', 'skill', name, json.dumps({'location': location, 'agentId': agent_id}))
         return jsonify({'success': True, 'data': {'name': name, 'path': str(skill_dir)}, 'message': f'Skill {name} 创建成功'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3167,7 +3477,7 @@ def update_skill(skill_slug):
         with open(skill_md, 'w', encoding='utf-8') as f:
             f.write(content)
 
-        log_operation('update_skill', 'skill', skill_slug)
+        log_operation_direct('update_skill', 'skill', skill_slug)
         return jsonify({'success': True, 'message': f'Skill {skill_slug} 已更新'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3202,7 +3512,7 @@ def delete_skill(skill_slug):
             del config['skills']['entries'][skill_slug]
             _save_config_via_ws(config)
 
-        log_operation('delete_skill', 'skill', skill_slug)
+        log_operation_direct('delete_skill', 'skill', skill_slug)
         return jsonify({'success': True, 'message': f'Skill {skill_slug} 已删除'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3254,7 +3564,7 @@ def create_department():
             'sort_order': sort_order
         })
 
-        log_operation('create_department', 'department', str(dept_id), {'name': name})
+        log_operation_direct('create_department', 'department', str(dept_id), {'name': name})
         return jsonify({'success': True, 'data': {'id': dept_id, 'name': name}})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3280,7 +3590,7 @@ def update_department(dept_id):
         update_data['updated_at'] = datetime.now().isoformat()
 
         db.update('departments', update_data, 'id = ?', (dept_id,))
-        log_operation('update_department', 'department', str(dept_id))
+        log_operation_direct('update_department', 'department', str(dept_id))
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3302,7 +3612,7 @@ def delete_department(dept_id):
             return jsonify({'success': False, 'error': '该部门下有员工，无法删除'}), 400
 
         db.delete('departments', 'id = ?', (dept_id,))
-        log_operation('delete_department', 'department', str(dept_id))
+        log_operation_direct('delete_department', 'department', str(dept_id))
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3424,7 +3734,7 @@ def create_employee():
             'agent_id': agent_id
         })
 
-        log_operation('create_employee', 'employee', str(emp_id), {'name': name})
+        log_operation_direct('create_employee', 'employee', str(emp_id), {'name': name})
         return jsonify({'success': True, 'data': {'id': emp_id, 'name': name}})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3467,7 +3777,7 @@ def update_employee(emp_id):
         update_data['updated_at'] = datetime.now().isoformat()
 
         db.update('employees', update_data, 'id = ?', (emp_id,))
-        log_operation('update_employee', 'employee', str(emp_id))
+        log_operation_direct('update_employee', 'employee', str(emp_id))
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3491,7 +3801,7 @@ def delete_employee(emp_id):
         emp = db.fetch_one("SELECT name FROM employees WHERE id = ?", (emp_id,))
         db.delete('employees', 'id = ?', (emp_id,))
 
-        log_operation('delete_employee', 'employee', str(emp_id), {'name': emp['name'] if emp else ''})
+        log_operation_direct('delete_employee', 'employee', str(emp_id), {'name': emp['name'] if emp else ''})
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3522,7 +3832,7 @@ def bind_agent_to_employee(emp_id):
             return jsonify({'success': False, 'error': '该 Agent 已被其他员工绑定'}), 400
 
         db.update('employees', {'agent_id': agent_id, 'updated_at': datetime.now().isoformat()}, 'id = ?', (emp_id,))
-        log_operation('bind_agent', 'employee', str(emp_id), {'agent_id': agent_id})
+        log_operation_direct('bind_agent', 'employee', str(emp_id), {'agent_id': agent_id})
         return jsonify({'success': True, 'message': f'已绑定 Agent: {agent.get("name")}'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3534,7 +3844,7 @@ def unbind_agent_from_employee(emp_id):
     """解除员工的 Agent 绑定"""
     try:
         db.update('employees', {'agent_id': None, 'updated_at': datetime.now().isoformat()}, 'id = ?', (emp_id,))
-        log_operation('unbind_agent', 'employee', str(emp_id))
+        log_operation_direct('unbind_agent', 'employee', str(emp_id))
         return jsonify({'success': True, 'message': '已解除 Agent 绑定'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3593,7 +3903,7 @@ def create_gateway():
             'status': 'unknown'
         })
 
-        log_operation('create_gateway', 'gateway', str(gw_id), {'name': name, 'url': url})
+        log_operation_direct('create_gateway', 'gateway', str(gw_id), {'name': name, 'url': url})
         return jsonify({'success': True, 'data': {'id': gw_id, 'name': name}, 'message': 'Gateway 创建成功'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3622,7 +3932,7 @@ def update_gateway(gw_id):
             update_data['is_default'] = 1 if data['is_default'] else 0
 
         db.update('gateways', update_data, 'id = ?', (gw_id,))
-        log_operation('update_gateway', 'gateway', str(gw_id))
+        log_operation_direct('update_gateway', 'gateway', str(gw_id))
 
         return jsonify({'success': True, 'message': 'Gateway 已更新'})
     except Exception as e:
@@ -3645,7 +3955,7 @@ def delete_gateway(gw_id):
             return jsonify({'success': False, 'error': '至少保留一个 Gateway'}), 400
 
         db.delete('gateways', 'id = ?', (gw_id,))
-        log_operation('delete_gateway', 'gateway', str(gw_id))
+        log_operation_direct('delete_gateway', 'gateway', str(gw_id))
 
         # 如果删除的是默认 Gateway，设置第一个为默认
         if gw['is_default']:
@@ -3719,7 +4029,7 @@ def set_default_gateway(gw_id):
         from gateway_sync import set_current_gateway
         set_current_gateway(gw_id)
 
-        log_operation('set_default_gateway', 'gateway', str(gw_id))
+        log_operation_direct('set_default_gateway', 'gateway', str(gw_id))
         return jsonify({'success': True, 'message': f'已将 {gw["name"]} 设为默认 Gateway'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3770,8 +4080,366 @@ def set_current_gateway_api():
         from gateway_sync import set_current_gateway
         set_current_gateway(gw_id)
 
-        log_operation('switch_gateway', 'gateway', str(gw_id))
+        log_operation_direct('switch_gateway', 'gateway', str(gw_id))
         return jsonify({'success': True, 'message': f'已切换到 {gw["name"]}'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==================== 渠道配置管理 API ====================
+
+@app.route('/api/channel-config/types', methods=['GET'])
+@require_permission('config', 'read')
+def get_channel_types():
+    """获取所有渠道类型"""
+    try:
+        types = channel_manager.get_channel_types()
+        return jsonify({'success': True, 'data': types})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/channel-config', methods=['GET'])
+@require_permission('config', 'read')
+def list_channel_configs():
+    """获取所有渠道配置"""
+    try:
+        configs = channel_manager.list_configs()
+        return jsonify({'success': True, 'data': configs})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/channel-config/<channel_type>', methods=['GET'])
+@require_permission('config', 'read')
+def get_channel_config(channel_type):
+    """获取指定渠道配置"""
+    try:
+        config = channel_manager.get_config(channel_type)
+        if not config:
+            return jsonify({'success': True, 'data': None})
+        return jsonify({'success': True, 'data': config})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/channel-config/<channel_type>', methods=['POST'])
+@require_permission('config', 'write')
+@log_operation('保存渠道配置', 'channel-config')
+def save_channel_config(channel_type):
+    """保存渠道配置"""
+    try:
+        data = request.get_json()
+
+        # 验证配置
+        validation = channel_manager.validate_config(channel_type, data)
+        if not validation['valid']:
+            return jsonify({
+                'success': False,
+                'error': '配置验证失败',
+                'details': validation['errors']
+            }), 400
+
+        # 保存配置
+        config = channel_manager.save_config(channel_type, data)
+
+        logger.info(f'保存渠道配置成功: {channel_type}')
+        return jsonify({
+            'success': True,
+            'data': config,
+            'warnings': validation.get('warnings', [])
+        })
+
+    except Exception as e:
+        logger.error(f'保存渠道配置失败: {str(e)}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/channel-config/<channel_type>', methods=['DELETE'])
+@require_permission('config', 'write')
+@log_operation('删除渠道配置', 'channel-config')
+def delete_channel_config(channel_type):
+    """删除渠道配置"""
+    try:
+        success = channel_manager.delete_config(channel_type)
+        if not success:
+            return jsonify({'success': False, 'error': '配置不存在'}), 404
+
+        logger.info(f'删除渠道配置成功: {channel_type}')
+        return jsonify({'success': True, 'message': '配置已删除'})
+
+    except Exception as e:
+        logger.error(f'删除渠道配置失败: {str(e)}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/channel-config/<channel_type>/validate', methods=['POST'])
+@require_permission('config', 'read')
+def validate_channel_config(channel_type):
+    """验证渠道配置"""
+    try:
+        data = request.get_json()
+        validation = channel_manager.validate_config(channel_type, data)
+        return jsonify({'success': True, 'data': validation})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==================== 配置同步 API ====================
+
+@app.route('/api/sync/status', methods=['GET'])
+@require_permission('config', 'read')
+def get_sync_status():
+    """获取同步状态"""
+    try:
+        status = config_sync.get_sync_status()
+        return jsonify({'success': True, 'data': status})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/sync/models', methods=['POST'])
+@require_permission('config', 'write')
+@log_operation('同步模型配置', 'sync')
+def sync_models():
+    """同步模型配置到 Gateway"""
+    try:
+        result = config_sync.sync_models_to_gateway()
+        if result['success']:
+            logger.info(result['message'])
+            return jsonify({'success': True, 'message': result['message']})
+        else:
+            return jsonify({'success': False, 'error': result.get('error', '同步失败')}), 500
+    except Exception as e:
+        logger.error(f'同步模型失败: {str(e)}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/sync/channel/<channel_type>', methods=['POST'])
+@require_permission('config', 'write')
+@log_operation('同步渠道配置', 'sync')
+def sync_channel(channel_type):
+    """同步渠道配置到 Gateway"""
+    try:
+        result = config_sync.sync_channel_to_gateway(channel_type)
+        if result['success']:
+            logger.info(result['message'])
+            return jsonify({'success': True, 'message': result['message']})
+        else:
+            return jsonify({'success': False, 'error': result.get('error', '同步失败')}), 500
+    except Exception as e:
+        logger.error(f'同步渠道失败: {str(e)}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/sync/all', methods=['POST'])
+@require_permission('config', 'write')
+@log_operation('同步所有配置', 'sync')
+def sync_all():
+    """同步所有配置到 Gateway"""
+    try:
+        results = config_sync.sync_all_to_gateway()
+        logger.info(f'配置同步完成: {results}')
+        return jsonify({'success': True, 'data': results})
+    except Exception as e:
+        logger.error(f'同步失败: {str(e)}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==================== 任务管理 API ====================
+
+@app.route('/api/tasks', methods=['GET'])
+@require_permission('employees', 'read')
+def get_tasks():
+    """获取任务列表"""
+    try:
+        # 获取查询参数
+        agent_id = request.args.get('agent_id')
+        status = request.args.get('status')
+        task_type = request.args.get('task_type')
+        date_from = request.args.get('date_from')
+        date_to = request.args.get('date_to')
+
+        # 构建查询
+        query = 'SELECT * FROM tasks WHERE 1=1'
+        params = []
+
+        if agent_id:
+            query += ' AND agent_id = ?'
+            params.append(agent_id)
+        if status:
+            query += ' AND status = ?'
+            params.append(status)
+        if task_type:
+            query += ' AND task_type = ?'
+            params.append(task_type)
+        if date_from:
+            query += ' AND created_at >= ?'
+            params.append(date_from)
+        if date_to:
+            query += ' AND created_at <= ?'
+            params.append(date_to)
+
+        query += ' ORDER BY created_at DESC LIMIT 500'
+
+        tasks = db.fetch_all(query, tuple(params))
+        return jsonify({'success': True, 'data': tasks})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/tasks/stats', methods=['GET'])
+@require_permission('employees', 'read')
+def get_task_stats():
+    """获取任务统计"""
+    try:
+        # 总任务数
+        total = db.fetch_one('SELECT COUNT(*) as count FROM tasks')
+        total_count = total['count'] if total else 0
+
+        # 按状态统计
+        status_stats = db.fetch_all(
+            'SELECT status, COUNT(*) as count FROM tasks GROUP BY status'
+        )
+        status_counts = {s['status']: s['count'] for s in status_stats}
+
+        # 按类型统计
+        type_stats = db.fetch_all(
+            'SELECT task_type, COUNT(*) as count FROM tasks GROUP BY task_type'
+        )
+        type_counts = {t['task_type'] or 'unknown': t['count'] for t in type_stats}
+
+        # 按 Agent 统计
+        agent_stats = db.fetch_all(
+            'SELECT agent_id, COUNT(*) as count FROM tasks GROUP BY agent_id ORDER BY count DESC LIMIT 10'
+        )
+
+        # 今日任务
+        from datetime import datetime
+        today = datetime.now().strftime('%Y-%m-%d')
+        today_tasks = db.fetch_one(
+            'SELECT COUNT(*) as count FROM tasks WHERE date(created_at) = ?',
+            (today,)
+        )
+        today_count = today_tasks['count'] if today_tasks else 0
+
+        # 平均耗时
+        avg_duration = db.fetch_one(
+            'SELECT AVG(duration_seconds) as avg FROM tasks WHERE duration_seconds IS NOT NULL'
+        )
+        avg_seconds = avg_duration['avg'] if avg_duration and avg_duration['avg'] else 0
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'total': total_count,
+                'today': today_count,
+                'by_status': status_counts,
+                'by_type': type_counts,
+                'by_agent': agent_stats,
+                'avg_duration_seconds': int(avg_seconds)
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/tasks/<int:task_id>', methods=['GET'])
+@require_permission('employees', 'read')
+def get_task(task_id):
+    """获取任务详情"""
+    try:
+        task = db.fetch_one('SELECT * FROM tasks WHERE id = ?', (task_id,))
+        if not task:
+            return jsonify({'success': False, 'error': '任务不存在'}), 404
+        return jsonify({'success': True, 'data': task})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==================== 知识库管理 API ====================
+
+@app.route('/api/knowledge', methods=['GET'])
+@require_permission('skills', 'read')
+def get_knowledge_bases():
+    """获取知识库列表"""
+    try:
+        # 从 Gateway 获取 Agent 列表
+        agents = _get_agents_via_ws()
+
+        # 为每个 Agent 构建知识库信息
+        knowledge_bases = []
+        for agent in agents:
+            agent_id = agent.get('id')
+            workspace = agent.get('workspace', '')
+
+            # 检查 knowledge 目录
+            import os
+            from pathlib import Path
+
+            if workspace:
+                knowledge_path = Path(workspace) / 'knowledge'
+                if knowledge_path.exists():
+                    files = list(knowledge_path.glob('*'))
+                    knowledge_bases.append({
+                        'agent_id': agent_id,
+                        'agent_name': agent.get('name', agent_id),
+                        'file_count': len([f for f in files if f.is_file()]),
+                        'total_size': sum(f.stat().st_size for f in files if f.is_file()),
+                        'path': str(knowledge_path),
+                        'exists': True
+                    })
+                else:
+                    knowledge_bases.append({
+                        'agent_id': agent_id,
+                        'agent_name': agent.get('name', agent_id),
+                        'file_count': 0,
+                        'total_size': 0,
+                        'path': str(knowledge_path),
+                        'exists': False
+                    })
+
+        return jsonify({'success': True, 'data': knowledge_bases})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/knowledge/<agent_id>', methods=['GET'])
+@require_permission('skills', 'read')
+def get_knowledge_files(agent_id):
+    """获取知识库文件列表"""
+    try:
+        agent = _get_agent_via_ws(agent_id)
+        if not agent:
+            return jsonify({'success': False, 'error': 'Agent 不存在'}), 404
+
+        workspace = agent.get('workspace', '')
+        if not workspace:
+            return jsonify({'success': False, 'error': 'Agent 未配置 workspace'}), 400
+
+        from pathlib import Path
+        knowledge_path = Path(workspace) / 'knowledge'
+
+        files = []
+        if knowledge_path.exists():
+            for f in knowledge_path.iterdir():
+                if f.is_file():
+                    stat = f.stat()
+                    files.append({
+                        'name': f.name,
+                        'size': stat.st_size,
+                        'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                        'type': f.suffix
+                    })
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'agent_id': agent_id,
+                'path': str(knowledge_path),
+                'files': files
+            }
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 

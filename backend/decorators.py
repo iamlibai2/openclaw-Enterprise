@@ -150,8 +150,56 @@ def log_exceptions(f):
     return decorated
 
 
-def log_operation(action: str, resource: str = None, resource_id: str = None, details: str = None):
-    """记录操作日志"""
+def log_operation(action: str, resource: str = None, resource_id_param: str = None):
+    """
+    操作日志装饰器
+
+    用法:
+        @log_operation('创建模型', 'model')
+        def create_model():
+            ...
+
+        或获取动态 resource_id:
+        @log_operation('删除模型', 'model', resource_id_param='model_id')
+        def delete_model(model_id):
+            ...
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            # 执行原函数
+            result = f(*args, **kwargs)
+
+            # 记录日志
+            try:
+                user = get_current_user()
+                user_id = user.get('user_id') if user else None
+                ip_address = request.remote_addr
+
+                # 获取 resource_id
+                resource_id = None
+                if resource_id_param:
+                    # 从 URL 参数获取
+                    resource_id = kwargs.get(resource_id_param) or request.view_args.get(resource_id_param)
+
+                db.insert('operation_logs', {
+                    'user_id': user_id,
+                    'action': action,
+                    'resource': resource,
+                    'resource_id': str(resource_id) if resource_id else None,
+                    'details': None,
+                    'ip_address': ip_address
+                })
+            except Exception:
+                pass  # 日志记录失败不影响主流程
+
+            return result
+        return decorated
+    return decorator
+
+
+def log_operation_direct(action: str, resource: str = None, resource_id: str = None, details: str = None):
+    """直接记录操作日志（非装饰器用法）"""
     user = get_current_user()
     user_id = user.get('user_id') if user else None
     ip_address = request.remote_addr

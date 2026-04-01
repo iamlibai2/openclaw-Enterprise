@@ -175,6 +175,35 @@ class Database:
             )
         """)
 
+        # 创建模型配置表（用于模型管理）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS models (
+                id TEXT PRIMARY KEY,
+                name VARCHAR(100) NOT NULL,
+                provider VARCHAR(50) NOT NULL,
+                model_type VARCHAR(20) DEFAULT 'chat',
+                api_key_encrypted TEXT,
+                api_base VARCHAR(500),
+                model_name VARCHAR(100) NOT NULL,
+                parameters TEXT,
+                enabled BOOLEAN DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # 创建渠道配置表（用于飞书/钉钉等渠道配置）
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS channel_configs (
+                id TEXT PRIMARY KEY,
+                channel_type VARCHAR(50) NOT NULL,
+                config_encrypted TEXT,
+                enabled BOOLEAN DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         conn.commit()
         conn.close()
 

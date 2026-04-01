@@ -1,10 +1,23 @@
 """
 OpenClaw Admin UI 配置
 
-管理应用配置，包括 Gateway 连接参数等。
+管理应用配置，包括 Gateway 连接参数、加密密钥等。
 """
 import os
 from pathlib import Path
+
+
+# 加载 .env 文件（如果存在）
+_env_file = Path(__file__).parent / '.env'
+if _env_file.exists():
+    with open(_env_file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                key, value = line.split('=', 1)
+                # 只设置未定义的环境变量
+                if key not in os.environ:
+                    os.environ[key] = value
 
 
 class Settings:

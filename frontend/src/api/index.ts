@@ -165,13 +165,6 @@ export const agentApi = {
   }
 }
 
-// ==================== Model API ====================
-export const modelApi = {
-  list() {
-    return api.get('/models')
-  }
-}
-
 // ==================== Binding API ====================
 export interface BindingMatch {
   channel?: string       // 频道名：feishu, dingtalk-connector
@@ -727,6 +720,165 @@ export const employeeApi = {
 
   unbindAgent(id: number) {
     return api.post<BaseResponse>(`/employees/${id}/unbind-agent`)
+  }
+}
+
+// ==================== 模型管理 API ====================
+
+export interface ModelProvider {
+  id: string
+  name: string
+  api_base: string
+  models: string[]
+  auth_type: string
+  description: string
+}
+
+export interface ModelConfig {
+  id: string
+  name: string
+  provider: string
+  model_type: string
+  api_base: string
+  model_name: string
+  parameters: Record<string, any>
+  api_key_masked: string
+  enabled: boolean
+  created_at: string
+  updated_at: string
+  testing?: boolean  // 前端状态，用于测试按钮 loading
+}
+
+export interface ModelTestResult {
+  connected: boolean
+  response_time?: number
+  model?: string
+  error?: string
+  status_code?: number
+}
+
+export const modelApi = {
+  // 获取提供商模板
+  getProviders() {
+    return api.get<{ success: boolean; data: ModelProvider[] }>('/models/providers')
+  },
+
+  // 获取指定提供商的模型列表
+  getProviderModels(providerId: string) {
+    return api.get<{ success: boolean; data: string[] }>(`/models/providers/${providerId}/models`)
+  },
+
+  // 获取所有模型配置
+  list() {
+    return api.get<{ success: boolean; data: ModelConfig[] }>('/models')
+  },
+
+  // 获取单个模型
+  get(modelId: string) {
+    return api.get<{ success: boolean; data: ModelConfig }>(`/models/${modelId}`)
+  },
+
+  // 创建模型
+  create(data: {
+    name: string
+    provider: string
+    model_name: string
+    api_key: string
+    api_base?: string
+    model_type?: string
+    parameters?: Record<string, any>
+    enabled?: boolean
+  }) {
+    return api.post<{ success: boolean; data: ModelConfig }>('/models', data)
+  },
+
+  // 更新模型
+  update(modelId: string, data: Partial<{
+    name: string
+    provider: string
+    model_name: string
+    api_key: string
+    api_base: string
+    model_type: string
+    parameters: Record<string, any>
+    enabled: boolean
+  }>) {
+    return api.put<{ success: boolean; data: ModelConfig }>(`/models/${modelId}`, data)
+  },
+
+  // 删除模型
+  delete(modelId: string) {
+    return api.delete<BaseResponse>(`/models/${modelId}`)
+  },
+
+  // 测试模型连接
+  testConnection(modelId: string) {
+    return api.post<{ success: boolean; data: ModelTestResult }>(`/models/${modelId}/test`)
+  },
+
+  // 获取 Gateway 模型列表（用于同步）
+  getGatewayModels() {
+    return api.get<{ success: boolean; data: any[] }>('/models/gateway')
+  }
+}
+
+// ==================== 渠道配置 API ====================
+
+export interface ChannelType {
+  id: string
+  name: string
+  description: string
+  config_fields: string[]
+  required_fields: string[]
+}
+
+export interface ChannelConfig {
+  id: string
+  channel_type: string
+  channel_name: string
+  enabled: boolean
+  app_id?: string
+  app_id_masked?: string
+  app_secret_masked?: string
+  app_key?: string
+  app_key_masked?: string
+  event_url?: string
+  callback_url?: string
+  bot_name?: string
+  agent_id?: string
+  created_at: string
+  updated_at: string
+}
+
+export const channelConfigApi = {
+  // 获取渠道类型
+  getTypes() {
+    return api.get<{ success: boolean; data: ChannelType[] }>('/channel-config/types')
+  },
+
+  // 获取所有配置
+  list() {
+    return api.get<{ success: boolean; data: ChannelConfig[] }>('/channel-config')
+  },
+
+  // 获取指定渠道配置
+  get(channelType: string) {
+    return api.get<{ success: boolean; data: ChannelConfig | null }>(`/channel-config/${channelType}`)
+  },
+
+  // 保存配置
+  save(channelType: string, data: Record<string, any>) {
+    return api.post<{ success: boolean; data: ChannelConfig; warnings?: string[] }>(`/channel-config/${channelType}`, data)
+  },
+
+  // 删除配置
+  delete(channelType: string) {
+    return api.delete<BaseResponse>(`/channel-config/${channelType}`)
+  },
+
+  // 验证配置
+  validate(channelType: string, data: Record<string, any>) {
+    return api.post<{ success: boolean; data: { valid: boolean; errors: string[]; warnings: string[] } }>(`/channel-config/${channelType}/validate`, data)
   }
 }
 

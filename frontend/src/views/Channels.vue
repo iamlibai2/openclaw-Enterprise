@@ -5,6 +5,26 @@
       <span class="subtitle">管理外部通信渠道与账号配置</span>
     </div>
 
+    <!-- 配置向导入口 -->
+    <el-card class="wizard-entry-card">
+      <div class="wizard-entry">
+        <div class="wizard-info">
+          <h3>渠道配置向导</h3>
+          <p>通过向导快速配置飞书、钉钉等渠道</p>
+        </div>
+        <div class="wizard-buttons">
+          <el-button type="primary" @click="showFeishuWizard">
+            <el-icon><ChatDotRound /></el-icon>
+            配置飞书
+          </el-button>
+          <el-button type="primary" @click="showDingtalkWizard">
+            <el-icon><ChatDotRound /></el-icon>
+            配置钉钉
+          </el-button>
+        </div>
+      </div>
+    </el-card>
+
     <!-- 渠道列表 -->
     <div class="channel-list" v-loading="loading">
       <el-card v-for="channel in channels" :key="channel.name" class="channel-card">
@@ -215,19 +235,41 @@
         <el-button type="danger" @click="doDeleteAccount" :loading="deleting">删除</el-button>
       </template>
     </el-dialog>
+
+    <!-- 渠道配置向导 -->
+    <ChannelWizard
+      v-model="wizardVisible"
+      :channel-type="wizardChannelType"
+      @success="loadChannels"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, ChatDotRound } from '@element-plus/icons-vue'
 import { channelApi } from '../api'
 import type { Channel, ChannelAccount } from '../api'
+import ChannelWizard from '../components/ChannelWizard.vue'
 
 const channels = ref<Channel[]>([])
 const loading = ref(false)
 const canEdit = ref(false)
+
+// 配置向导
+const wizardVisible = ref(false)
+const wizardChannelType = ref('')
+
+const showFeishuWizard = () => {
+  wizardChannelType.value = 'feishu'
+  wizardVisible.value = true
+}
+
+const showDingtalkWizard = () => {
+  wizardChannelType.value = 'dingtalk'
+  wizardVisible.value = true
+}
 
 // 账号弹窗
 const accountDialogVisible = ref(false)
@@ -442,6 +484,32 @@ onMounted(() => {
 .page-header .subtitle {
   color: #909399;
   font-size: 14px;
+}
+
+.wizard-entry-card {
+  margin-bottom: 20px;
+}
+
+.wizard-entry {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.wizard-info h3 {
+  font-size: 16px;
+  margin: 0 0 4px 0;
+}
+
+.wizard-info p {
+  font-size: 13px;
+  color: #909399;
+  margin: 0;
+}
+
+.wizard-buttons {
+  display: flex;
+  gap: 12px;
 }
 
 .channel-list {
