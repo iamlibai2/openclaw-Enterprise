@@ -1,0 +1,34 @@
+# 数据库文件
+backend/data/*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+.venv/
+
+# Node
+node_modules/
+**/node_modules/
+frontend/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+backend/logs/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 敏感配置
+*.pem
+*.key
+credentials.json
