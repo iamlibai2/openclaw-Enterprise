@@ -2738,19 +2738,12 @@ def get_session_agents():
 def get_agent_sessions(agent_id):
     """获取指定 Agent 的会话列表（包括活跃和归档会话）"""
     try:
-        # 使用 sessionFiles.list 插件 API（支持归档会话）
-        result_data = sync_call('sessionFiles.list', {
-            'agentId': agent_id,
-            'includeReset': True
-        })
-
-        if not result_data:
-            return jsonify({'success': True, 'data': []})
-
         result = []
 
-        # 处理活跃会话
-        active_sessions = result_data.get('sessions', [])
+        # 1. 获取活跃会话（使用 sessions.list 获取完整信息）
+        active_result = sync_call('sessions.list', {'agentId': agent_id})
+        active_sessions = active_result.get('sessions', []) if active_result else []
+
         for session in active_sessions:
             session_key = session.get('key', '')
             session_id = session.get('sessionId', '')
@@ -2768,7 +2761,7 @@ def get_agent_sessions(agent_id):
             chat_type = session.get('chatType', 'direct')
 
             # 状态信息
-            status = session.get('status', 'active')
+            status = session.get('status', 'unknown')
 
             result.append({
                 'sessionId': session_id,
@@ -2786,8 +2779,10 @@ def get_agent_sessions(agent_id):
                 'isReset': False
             })
 
-        # 处理归档会话 (.reset* 文件)
-        reset_files = result_data.get('resetFiles', [])
+        # 2. 获取归档会话（使用 sessionFiles.listReset）
+        reset_result = sync_call('sessionFiles.listReset', {'agentId': agent_id})
+        reset_files = reset_result.get('files', []) if reset_result else []
+
         for reset_file in reset_files:
             session_id = reset_file.get('sessionId', '')
             reset_at = reset_file.get('resetAt', '')
@@ -2809,12 +2804,12 @@ def get_agent_sessions(agent_id):
             result.append({
                 'sessionId': session_id,
                 'sessionKey': '',  # 归档会话没有 key
-                'displayName': f'{session_id} (归档)',
-                'channel': 'unknown',
+                'displayName': f'{session_id[:8]}... (归档)',
+                'channel': 'archived',
                 'chatType': 'unknown',
                 'updatedAt': updated_at,
                 'updatedAtTs': updated_at_ts,
-                'status': 'reset',
+                'status': 'archived',
                 'model': '',
                 'modelProvider': '',
                 'runtimeMs': 0,
@@ -2830,8 +2825,8 @@ def get_agent_sessions(agent_id):
         return jsonify({
             'success': True,
             'data': result,
-            'totalActive': result_data.get('totalActive', 0),
-            'totalReset': result_data.get('totalReset', 0)
+            'totalActive': len(active_sessions),
+            'totalReset': len(reset_files)
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
