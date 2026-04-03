@@ -351,7 +351,7 @@ class Database:
         cursor.execute(
             """INSERT INTO gateways (name, url, auth_token, is_default, status)
                VALUES (?, ?, ?, ?, ?)""",
-            ('本地 Gateway', 'ws://127.0.0.1:4444', '', 1, 'unknown')
+            ('本地 Gateway', 'ws://127.0.0.1:18789', '', 1, 'unknown')
         )
 
         conn.commit()

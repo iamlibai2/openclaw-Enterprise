@@ -28,7 +28,7 @@ class GatewayClient:
     OpenClaw Gateway WebSocket 客户端
 
     使用方法:
-        client = GatewayClient("ws://127.0.0.1:4444")
+        client = GatewayClient("ws://127.0.0.1:18789")
         await client.connect()
 
         # 获取配置
@@ -39,7 +39,7 @@ class GatewayClient:
         result = await client.call("agents.create", {"name": "neo", "model": {"primary": "gpt-4"}})
     """
 
-    def __init__(self, gateway_url: str = "ws://127.0.0.1:4444", auth_token: Optional[str] = None):
+    def __init__(self, gateway_url: str = "ws://127.0.0.1:18789", auth_token: Optional[str] = None):
         """
         初始化客户端
 
