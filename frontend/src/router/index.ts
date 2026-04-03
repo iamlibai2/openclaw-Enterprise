@@ -153,6 +153,13 @@ const routes = [
     component: () => import('../views/Docs.vue'),
     meta: { requiresAuth: true }
   },
+  // AI 工具
+  {
+    path: '/image-generator',
+    name: 'ImageGenerator',
+    component: () => import('../views/ImageGenerator.vue'),
+    meta: { requiresAuth: true }
+  },
   // 403 无权限
   {
     path: '/403',

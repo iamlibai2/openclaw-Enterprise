@@ -4,6 +4,7 @@ OpenClaw Admin UI 配置
 管理应用配置，包括 Gateway 连接参数、加密密钥等。
 """
 import os
+import json
 from pathlib import Path
 
 
@@ -18,6 +19,21 @@ if _env_file.exists():
                 # 只设置未定义的环境变量
                 if key not in os.environ:
                     os.environ[key] = value
+
+
+def _get_device_auth_token() -> str:
+    """从 OpenClaw 设备身份文件获取认证令牌"""
+    try:
+        device_auth_path = Path.home() / '.openclaw' / 'identity' / 'device-auth.json'
+        if device_auth_path.exists():
+            with open(device_auth_path, 'r') as f:
+                data = json.load(f)
+                tokens = data.get('tokens', {})
+                operator_token = tokens.get('operator', {})
+                return operator_token.get('token', '')
+    except Exception:
+        pass
+    return ''
 
 
 class Settings:
@@ -43,11 +59,22 @@ class Settings:
     DEBUG: bool = os.environ.get('DEBUG', 'false').lower() == 'true'
 
     # Gateway 配置（从环境变量获取默认值，实际使用时从数据库读取）
-    GATEWAY_URL: str = os.environ.get('GATEWAY_URL', 'ws://127.0.0.1:4444')
-    GATEWAY_AUTH_TOKEN: str = os.environ.get('GATEWAY_AUTH_TOKEN', '')
+    GATEWAY_URL: str = os.environ.get('GATEWAY_URL', 'ws://127.0.0.1:18789')
+
+    # Gateway 认证令牌：优先使用环境变量，否则从设备身份文件读取
+    GATEWAY_AUTH_TOKEN: str = os.environ.get(
+        'GATEWAY_AUTH_TOKEN',
+        _get_device_auth_token()
+    )
 
     # 当前使用的 Gateway ID（None 表示使用默认 Gateway）
     current_gateway_id: int = None
+
+    # 火山引擎文生图 API Key
+    VOLCENGINE_API_KEY: str = os.environ.get(
+        'VOLCENGINE_API_KEY',
+        '38da0ee8-2880-4812-ba69-e4c9ba613d81'
+    )
 
 
 # 全局配置实例

@@ -245,7 +245,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, SuccessFilled, CircleCloseFilled } from '@element-plus/icons-vue'
-import { modelApi, type ModelProvider, type ModelConfig, type ModelTestResult } from '@/api'
+import { modelApi, type ModelProvider, type ModelConfig, type ModelTestResult } from '../api'
 
 // 状态
 const loading = ref(false)

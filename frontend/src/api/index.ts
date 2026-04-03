@@ -395,6 +395,68 @@ export const sessionApi = {
   }
 }
 
+// ==================== Focus Mode API ====================
+export const focusApi = {
+  // 启用专注模式
+  enable(sessionKey: string, options?: {
+    taskDescription?: string
+    keywords?: string[]
+    compactNow?: boolean
+  }) {
+    return api.post<{ success: boolean; data: FocusStatus; message: string }>('/focus/focus', {
+      sessionKey,
+      ...options
+    })
+  },
+
+  // 执行智能压缩
+  compact(sessionKey: string, options?: {
+    taskDescription?: string
+    keywords?: string[]
+    tokenBudget?: number
+  }) {
+    return api.post<{ success: boolean; compacted: boolean; data: FocusCompactResult }>('/focus/compact', {
+      sessionKey,
+      ...options
+    })
+  },
+
+  // 获取专注模式状态
+  getStatus(sessionKey: string) {
+    return api.get<{ success: boolean; data: FocusStatus }>('/focus/status', {
+      params: { sessionKey }
+    })
+  },
+
+  // 清除专注模式
+  clear(sessionKey: string) {
+    return api.post<{ success: boolean; message: string }>('/focus/clear', {
+      sessionKey
+    })
+  }
+}
+
+export interface FocusStatus {
+  enabled: boolean
+  taskDescription?: string
+  keywords?: string[]
+  startedAt?: string
+  messagesRemoved?: number
+  tokensSaved?: number
+}
+
+export interface FocusCompactResult {
+  tokensBefore: number
+  tokensAfter: number
+  summary: string
+  details: {
+    messagesRemoved: number
+    messagesKept: number
+    keywords: string[]
+    focusMode: boolean
+  }
+}
+
 // ==================== 记忆文件 API ====================
 export const memoryApi = {
   list(agentId: string) {
@@ -822,7 +884,7 @@ export const modelApi = {
   }
 }
 
-// ==================== 渠道配置 API ====================
+// ==================== Channel 配置 API ====================
 
 export interface ChannelType {
   id: string
@@ -851,7 +913,7 @@ export interface ChannelConfig {
 }
 
 export const channelConfigApi = {
-  // 获取渠道类型
+  // 获取 Channel 类型
   getTypes() {
     return api.get<{ success: boolean; data: ChannelType[] }>('/channel-config/types')
   },
@@ -861,7 +923,7 @@ export const channelConfigApi = {
     return api.get<{ success: boolean; data: ChannelConfig[] }>('/channel-config')
   },
 
-  // 获取指定渠道配置
+  // 获取指定 Channel 配置
   get(channelType: string) {
     return api.get<{ success: boolean; data: ChannelConfig | null }>(`/channel-config/${channelType}`)
   },
@@ -879,6 +941,29 @@ export const channelConfigApi = {
   // 验证配置
   validate(channelType: string, data: Record<string, any>) {
     return api.post<{ success: boolean; data: { valid: boolean; errors: string[]; warnings: string[] } }>(`/channel-config/${channelType}/validate`, data)
+  }
+}
+
+// ==================== 图片生成 API ====================
+
+export interface ImageGenerateResult {
+  images: { url: string; b64_json?: string }[]
+  created: number
+}
+
+export const imageGeneratorApi = {
+  /**
+   * 文生图 - 根据提示词生成图片
+   */
+  generate(prompt: string, options?: { size?: string; n?: number }) {
+    return api.post<{ success: boolean; data: ImageGenerateResult; error?: string }>(
+      '/image-generator/generate',
+      {
+        prompt,
+        size: options?.size || '2k',
+        n: options?.n || 1
+      }
+    )
   }
 }
 

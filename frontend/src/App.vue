@@ -56,6 +56,10 @@
                     <el-icon><Document /></el-icon>
                     <span>任务列表</span>
                   </el-menu-item>
+                  <el-menu-item index="/image-generator">
+                    <el-icon><Picture /></el-icon>
+                    <span>图片生成</span>
+                  </el-menu-item>
                 </el-sub-menu>
 
                 <!-- 经验管理 -->
@@ -152,6 +156,10 @@
                     <el-icon><Cpu /></el-icon>
                     <span>模型配置</span>
                   </el-menu-item>
+                  <el-menu-item index="/channels" v-if="hasPermission('config', 'read')">
+                    <el-icon><ChatLineSquare /></el-icon>
+                    <span>Channel 管理</span>
+                  </el-menu-item>
                 </el-sub-menu>
 
                 <!-- 系统设置 -->
@@ -163,10 +171,6 @@
                   <el-menu-item index="/gateways">
                     <el-icon><Connection /></el-icon>
                     <span>Gateway 管理</span>
-                  </el-menu-item>
-                  <el-menu-item index="/channels" v-if="hasPermission('config', 'read')">
-                    <el-icon><ChatLineSquare /></el-icon>
-                    <span>渠道管理</span>
                   </el-menu-item>
                   <el-menu-item index="/users" v-if="hasPermission('users', 'read')">
                     <el-icon><Avatar /></el-icon>
@@ -306,7 +310,8 @@ import {
   Lightning,
   OfficeBuilding,
   Connection,
-  ChatLineSquare
+  ChatLineSquare,
+  Picture
 } from '@element-plus/icons-vue'
 import { useUserStore } from './stores/user'
 import { gatewayApi, authApi } from './api'

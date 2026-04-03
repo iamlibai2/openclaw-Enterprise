@@ -26,6 +26,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import re
 import yaml
+import json5
 
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
@@ -81,7 +82,6 @@ def _get_config_via_ws():
 def _save_config_via_ws(config: dict):
     """通过 WebSocket 保存配置"""
     global _config_hash
-    import json5
     raw = json5.dumps(config)
     sync_call('config.apply', {
         'raw': raw,
@@ -90,6 +90,54 @@ def _save_config_via_ws(config: dict):
     # 保存成功后更新 hash
     result = sync_call('config.get')
     _config_hash = result.get('hash')
+
+
+def _patch_config(patch: dict, max_retries: int = 3) -> dict:
+    """
+    部分更新配置（带重试机制）
+
+    Args:
+        patch: 要更新的配置片段，如 {'skills': {'entries': {'xxx': {'enabled': False}}}}
+        max_retries: 最大重试次数
+
+    Returns:
+        更新结果
+
+    Example:
+        result = _patch_config({
+            'skills': {
+                'entries': {
+                    'my-skill': {'enabled': False}
+                }
+            }
+        })
+    """
+    import time
+
+    patch_raw = json5.dumps(patch)
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            result = sync_call('config.get')
+            hash = result.get('hash')
+            result = sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
+            return result
+        except GatewayError as e:
+            last_error = e
+            error_str = str(e).lower()
+            # 检测配置冲突错误，需要重试
+            if any(x in error_str for x in ['hash', 'conflict', 'changed', 'stale']):
+                logger.warning(f"Config patch conflict, retrying ({attempt + 1}/{max_retries}): {e}")
+                time.sleep(0.1 * (attempt + 1))
+                continue
+            raise
+        except Exception as e:
+            last_error = e
+            logger.error(f"Config patch error: {e}")
+            raise
+
+    raise Exception(f"配置更新失败，重试耗尽: {last_error}")
 
 
 # ==================== 认证 API ====================
@@ -646,7 +694,6 @@ def create_binding():
         config['bindings'].append(data)
 
         # 使用 config.patch 更新
-        import json5
         patch_raw = json5.dumps({'bindings': config['bindings']})
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
@@ -682,7 +729,6 @@ def update_binding(index):
         bindings[index] = data
 
         # 使用 config.patch 更新
-        import json5
         patch_raw = json5.dumps({'bindings': bindings})
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
@@ -712,7 +758,6 @@ def delete_binding(index):
         deleted = bindings.pop(index)
 
         # 使用 config.patch 更新
-        import json5
         patch_raw = json5.dumps({'bindings': bindings})
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
@@ -757,7 +802,6 @@ def reorder_bindings():
             return jsonify({'success': False, 'error': '缺少必要参数'}), 400
 
         # 使用 config.patch 更新
-        import json5
         patch_raw = json5.dumps({'bindings': bindings})
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
@@ -816,7 +860,6 @@ def set_default_agent():
         bindings_config = config.get('bindings', {})
 
         # 使用 config.patch 更新
-        import json5
         patch_raw = json5.dumps({
             'bindings': bindings_config if isinstance(bindings_config, dict) else {'entries': bindings_config, 'defaultAgent': agent_id}
         })
@@ -1078,7 +1121,6 @@ def update_channel(channel_name):
         channels_config[channel_name] = channel_cfg
 
         # 使用 config.patch 更新
-        import json5
         patch_raw = json5.dumps({'channels': channels_config})
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
@@ -1125,7 +1167,6 @@ def create_channel_account(channel_name):
         channels_config[channel_name] = channel_cfg
 
         # 使用 config.patch 更新
-        import json5
         patch_raw = json5.dumps({'channels': channels_config})
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
@@ -1178,7 +1219,6 @@ def update_channel_account(channel_name, account_id):
         channels_config[channel_name] = channel_cfg
 
         # 使用 config.patch 更新
-        import json5
         patch_raw = json5.dumps({'channels': channels_config})
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
@@ -1215,7 +1255,6 @@ def delete_channel_account(channel_name, account_id):
         channels_config[channel_name] = channel_cfg
 
         # 使用 config.patch 更新
-        import json5
         patch_raw = json5.dumps({'channels': channels_config})
         sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
 
@@ -1408,8 +1447,6 @@ def get_full_config():
 def get_config_preview():
     """获取配置预览（JSON 格式）"""
     try:
-        import json5
-
         # 从 Gateway 获取配置
         result = sync_call('config.get')
         config = result.get('config', {})
@@ -3333,9 +3370,8 @@ def toggle_skill(skill_slug):
         data = request.get_json()
         enabled = data.get('enabled', True)
 
-        # 使用 config.patch 方法，只修改 skills 配置部分
-        import json5
-        patch_raw = json5.dumps({
+        # 使用通用配置更新函数
+        _patch_config({
             'skills': {
                 'entries': {
                     skill_slug: {'enabled': enabled}
@@ -3343,16 +3379,15 @@ def toggle_skill(skill_slug):
             }
         })
 
-        # 获取当前 hash
-        result = sync_call('config.get')
-        hash = result.get('hash')
+        log_operation_direct('toggle_skill', 'skill', skill_slug,
+            json.dumps({'enabled': enabled}))
+        return jsonify({
+            'success': True,
+            'message': f'Skill {skill_slug} 已{"启用" if enabled else "禁用"}'
+        })
 
-        # 使用 patch 方法更新
-        sync_call('config.patch', {'raw': patch_raw, 'baseHash': hash})
-
-        log_operation_direct('toggle_skill', 'skill', skill_slug, json.dumps({'enabled': enabled}))
-        return jsonify({'success': True, 'message': f'Skill {skill_slug} 已{"启用" if enabled else "禁用"}'})
     except Exception as e:
+        logger.error(f"Toggle skill error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -3364,7 +3399,6 @@ def update_skill_config(skill_slug):
         data = request.get_json()
 
         # 使用 config.patch 方法
-        import json5
         skill_config = {}
         for key in ['env', 'config', 'enabled']:
             if key in data:
@@ -4357,6 +4391,160 @@ def get_task(task_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ==================== Focus Mode API ====================
+# Focus Context Engine 插件提供的专注模式功能
+
+@app.route('/api/focus/focus', methods=['POST'])
+@require_permission('sessions', 'edit')
+def focus_mode():
+    """启用专注模式并可选触发压缩"""
+    try:
+        data = request.json
+        session_key = data.get('sessionKey')
+        task_description = data.get('taskDescription')
+        keywords = data.get('keywords')
+        compact_now = data.get('compactNow', False)
+
+        if not session_key:
+            return jsonify({'success': False, 'error': '缺少 sessionKey'}), 400
+
+        # 通过 Gateway WebSocket 调用 Focus 插件
+        params = {
+            'sessionKey': session_key,
+            'taskDescription': task_description,
+            'keywords': keywords,
+            'compactNow': compact_now
+        }
+        # 移除 None 值
+        params = {k: v for k, v in params.items() if v is not None}
+
+        result = sync_call('focus.focus', params)
+
+        if result and result.get('success'):
+            log_operation_direct('focus_mode', 'enable',
+                f'{session_key}: {task_description or "无描述"}')
+            return jsonify({
+                'success': True,
+                'data': result.get('status', {}),
+                'message': result.get('message', '')
+            })
+        else:
+            error_msg = result.get('error', {}).get('message', '启用专注模式失败') if result else 'Gateway 无响应'
+            return jsonify({'success': False, 'error': error_msg}), 500
+
+    except GatewayError as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    except Exception as e:
+        logger.error(f"Focus mode error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/focus/compact', methods=['POST'])
+@require_permission('sessions', 'edit')
+def focus_compact():
+    """执行智能压缩（清理无关上下文）"""
+    try:
+        data = request.json
+        session_key = data.get('sessionKey')
+        task_description = data.get('taskDescription')
+        keywords = data.get('keywords')
+        token_budget = data.get('tokenBudget')
+
+        if not session_key:
+            return jsonify({'success': False, 'error': '缺少 sessionKey'}), 400
+
+        # 通过 Gateway WebSocket 调用 Focus 插件的 compact 方法
+        params = {
+            'sessionKey': session_key,
+            'taskDescription': task_description,
+            'keywords': keywords,
+            'tokenBudget': token_budget
+        }
+        # 移除 None 值
+        params = {k: v for k, v in params.items() if v is not None}
+
+        result = sync_call('focus.compact', params)
+
+        if result and result.get('success'):
+            # 记录压缩结果
+            compact_result = result.get('result', {})
+            tokens_saved = compact_result.get('tokensBefore', 0) - compact_result.get('tokensAfter', 0)
+            messages_removed = compact_result.get('details', {}).get('messagesRemoved', 0)
+
+            log_operation_direct('focus_compact', 'execute',
+                f'{session_key}: removed {messages_removed} messages, saved {tokens_saved} tokens')
+
+            return jsonify({
+                'success': True,
+                'compacted': result.get('compacted', False),
+                'data': compact_result
+            })
+        else:
+            error_msg = result.get('error', {}).get('message', '压缩失败') if result else 'Gateway 无响应'
+            return jsonify({'success': False, 'error': error_msg}), 500
+
+    except GatewayError as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    except Exception as e:
+        logger.error(f"Focus compact error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/focus/status', methods=['GET'])
+@require_permission('sessions', 'read')
+def focus_get_status():
+    """获取专注模式状态"""
+    try:
+        session_key = request.args.get('sessionKey')
+        if not session_key:
+            return jsonify({'success': False, 'error': '缺少 sessionKey'}), 400
+
+        result = sync_call('focus.getStatus', {'sessionKey': session_key})
+
+        if result:
+            return jsonify({
+                'success': True,
+                'data': result.get('status', {})
+            })
+        else:
+            return jsonify({'success': False, 'error': 'Gateway 无响应'}), 500
+
+    except GatewayError as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    except Exception as e:
+        logger.error(f"Focus status error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/focus/clear', methods=['POST'])
+@require_permission('sessions', 'edit')
+def focus_clear():
+    """清除专注模式"""
+    try:
+        data = request.json
+        session_key = data.get('sessionKey')
+        if not session_key:
+            return jsonify({'success': False, 'error': '缺少 sessionKey'}), 400
+
+        result = sync_call('focus.clearStatus', {'sessionKey': session_key})
+
+        if result and result.get('success'):
+            log_operation_direct('focus_mode', 'clear', session_key)
+            return jsonify({
+                'success': True,
+                'message': '专注模式已清除'
+            })
+        else:
+            error_msg = result.get('error', {}).get('message', '清除失败') if result else 'Gateway 无响应'
+            return jsonify({'success': False, 'error': error_msg}), 500
+
+    except GatewayError as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    except Exception as e:
+        logger.error(f"Focus clear error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # ==================== 知识库管理 API ====================
 
 @app.route('/api/knowledge', methods=['GET'])
@@ -4444,12 +4632,58 @@ def get_knowledge_files(agent_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ==================== 图片生成 API ====================
+
+from image_generator import get_image_generator
+
+@app.route('/api/image-generator/generate', methods=['POST'])
+@require_auth
+def generate_image():
+    """
+    文生图 - 根据提示词生成图片
+
+    请求参数:
+        prompt: 提示词（必填）
+        size: 图片尺寸，"1K" 或 "2K"（默认 "1K"）
+        n: 生成数量，1-4（默认 1）
+    """
+    data = request.get_json()
+    prompt = data.get('prompt', '').strip()
+    size = data.get('size', '1K')
+    n = data.get('n', 1)
+
+    if not prompt:
+        return jsonify({'success': False, 'error': '请输入提示词'}), 400
+
+    # 验证参数（火山引擎要求至少 3686400 像素）
+    valid_sizes = ["2k", "4k"]
+    if size not in valid_sizes:
+        size = '2k'
+    n = max(1, min(4, int(n)))
+
+    try:
+        generator = get_image_generator()
+        result = generator.generate(prompt, size=size, n=n)
+        return jsonify({'success': True, 'data': result})
+    except Exception as e:
+        logger.error(f"图片生成失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     print("=" * 50)
     print("OpenClaw Admin Backend (企业版)")
     print("=" * 50)
     print(f"数据库路径: {db.db_path}")
-    print(f"Gateway URL: {settings.GATEWAY_URL}")
+
+    # 显示实际使用的 Gateway URL（优先从数据库获取）
+    try:
+        gateway = db.fetch_one("SELECT url FROM gateways WHERE is_default = 1")
+        actual_url = gateway['url'] if gateway else settings.GATEWAY_URL
+    except:
+        actual_url = settings.GATEWAY_URL
+    print(f"Gateway URL: {actual_url}")
+
     try:
         agents = _get_agents_via_ws()
         print(f"Agents 数量: {len(agents)}")
