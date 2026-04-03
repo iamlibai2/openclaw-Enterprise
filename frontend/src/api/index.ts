@@ -390,8 +390,16 @@ export const sessionApi = {
     return api.get(`/sessions/${agentId}`)
   },
 
-  messages(agentId: string, sessionId: string) {
-    return api.get(`/sessions/${agentId}/${sessionId}/messages`)
+  messages(agentId: string, sessionId: string, options?: { isReset?: boolean; filename?: string }) {
+    const params = new URLSearchParams()
+    if (options?.isReset) {
+      params.append('isReset', 'true')
+    }
+    if (options?.filename) {
+      params.append('filename', options.filename)
+    }
+    const query = params.toString()
+    return api.get(`/sessions/${agentId}/${sessionId}/messages${query ? '?' + query : ''}`)
   }
 }
 

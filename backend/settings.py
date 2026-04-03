@@ -70,12 +70,6 @@ class Settings:
     # 当前使用的 Gateway ID（None 表示使用默认 Gateway）
     current_gateway_id: int = None
 
-    # 火山引擎文生图 API Key
-    VOLCENGINE_API_KEY: str = os.environ.get(
-        'VOLCENGINE_API_KEY',
-        '38da0ee8-2880-4812-ba69-e4c9ba613d81'
-    )
-
 
 # 全局配置实例
 settings = Settings()

@@ -2736,19 +2736,22 @@ def get_session_agents():
 @app.route('/api/sessions/<agent_id>', methods=['GET'])
 @require_permission('sessions', 'read')
 def get_agent_sessions(agent_id):
-    """获取指定 Agent 的会话列表（通过 WebSocket）"""
+    """获取指定 Agent 的会话列表（包括活跃和归档会话）"""
     try:
-        # 通过 WebSocket 获取会话列表
-        result_data = sync_call('sessions.list', {'agentId': agent_id})
+        # 使用 sessionFiles.list 插件 API（支持归档会话）
+        result_data = sync_call('sessionFiles.list', {
+            'agentId': agent_id,
+            'includeReset': True
+        })
 
         if not result_data:
             return jsonify({'success': True, 'data': []})
 
-        sessions = result_data.get('sessions', [])
         result = []
 
-        for session in sessions:
-            # 提取会话信息
+        # 处理活跃会话
+        active_sessions = result_data.get('sessions', [])
+        for session in active_sessions:
             session_key = session.get('key', '')
             session_id = session.get('sessionId', '')
             updated_at_ts = session.get('updatedAt', 0)
@@ -2760,12 +2763,12 @@ def get_agent_sessions(agent_id):
                 updated_at = ''
 
             # 渠道信息
-            origin = session.get('origin', {})
-            channel = origin.get('provider', 'unknown')
+            origin_data = session.get('origin', {})
+            channel = origin_data.get('provider', 'unknown') if origin_data else 'unknown'
             chat_type = session.get('chatType', 'direct')
 
             # 状态信息
-            status = session.get('status', 'unknown')
+            status = session.get('status', 'active')
 
             result.append({
                 'sessionId': session_id,
@@ -2779,7 +2782,46 @@ def get_agent_sessions(agent_id):
                 'model': session.get('model', ''),
                 'modelProvider': session.get('modelProvider', ''),
                 'runtimeMs': session.get('runtimeMs', 0),
-                'childSessions': session.get('childSessions', [])
+                'childSessions': session.get('childSessions', []),
+                'isReset': False
+            })
+
+        # 处理归档会话 (.reset* 文件)
+        reset_files = result_data.get('resetFiles', [])
+        for reset_file in reset_files:
+            session_id = reset_file.get('sessionId', '')
+            reset_at = reset_file.get('resetAt', '')
+            modified_at = reset_file.get('modifiedAt', '')
+
+            # 格式化时间
+            if modified_at:
+                try:
+                    modified_date = datetime.fromisoformat(modified_at.replace('Z', '+00:00'))
+                    updated_at = modified_date.strftime('%Y-%m-%d %H:%M:%S')
+                    updated_at_ts = int(modified_date.timestamp() * 1000)
+                except:
+                    updated_at = modified_at
+                    updated_at_ts = 0
+            else:
+                updated_at = ''
+                updated_at_ts = 0
+
+            result.append({
+                'sessionId': session_id,
+                'sessionKey': '',  # 归档会话没有 key
+                'displayName': f'{session_id} (归档)',
+                'channel': 'unknown',
+                'chatType': 'unknown',
+                'updatedAt': updated_at,
+                'updatedAtTs': updated_at_ts,
+                'status': 'reset',
+                'model': '',
+                'modelProvider': '',
+                'runtimeMs': 0,
+                'childSessions': [],
+                'isReset': True,
+                'resetAt': reset_at,
+                'filename': reset_file.get('filename', '')
             })
 
         # 按更新时间排序（最新的在前）
@@ -2787,7 +2829,9 @@ def get_agent_sessions(agent_id):
 
         return jsonify({
             'success': True,
-            'data': result
+            'data': result,
+            'totalActive': result_data.get('totalActive', 0),
+            'totalReset': result_data.get('totalReset', 0)
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -2796,8 +2840,94 @@ def get_agent_sessions(agent_id):
 @app.route('/api/sessions/<agent_id>/<session_id>/messages', methods=['GET'])
 @require_permission('sessions', 'read')
 def get_session_messages(agent_id, session_id):
-    """获取会话的详细消息（通过 WebSocket）"""
+    """获取会话的详细消息（支持活跃和归档会话）"""
     try:
+        # 从请求参数获取是否为归档会话
+        is_reset = request.args.get('isReset', 'false').lower() == 'true'
+        filename = request.args.get('filename', '')
+
+        # 归档会话：使用 sessionFiles.get 直接读取文件
+        if is_reset:
+            if not filename:
+                # 如果没有提供 filename，尝试查找
+                files_result = sync_call('sessionFiles.listReset', {'agentId': agent_id})
+                reset_files = files_result.get('files', []) if files_result else []
+
+                # 查找匹配的文件
+                for f in reset_files:
+                    if f.get('sessionId') == session_id:
+                        filename = f.get('filename', '')
+                        break
+
+                if not filename:
+                    return jsonify({
+                        'success': False,
+                        'error': f'归档会话文件不存在 (session: {session_id[:8]}...)'
+                    }), 404
+
+            # 使用 sessionFiles.get 读取归档文件
+            result_data = sync_call('sessionFiles.get', {
+                'agentId': agent_id,
+                'filename': filename,
+                'format': 'messages'
+            })
+
+            if not result_data:
+                return jsonify({'success': True, 'data': []})
+
+            # sessionFiles.get 返回的 messages 格式与 sessions.get 不同，需要适配
+            raw_messages = result_data.get('messages', [])
+            messages = []
+
+            for msg in raw_messages:
+                # sessionFiles.get 的 message 格式
+                role = msg.get('role', '')
+                content = msg.get('content', '')
+                timestamp = msg.get('timestamp', '')
+
+                # 格式化时间
+                if timestamp:
+                    try:
+                        # timestamp 可能是 ISO 格式或毫秒时间戳
+                        if isinstance(timestamp, str):
+                            ts_date = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                        else:
+                            ts_date = datetime.fromtimestamp(timestamp / 1000)
+                        formatted_time = ts_date.strftime('%Y-%m-%d %H:%M:%S')
+                    except:
+                        formatted_time = str(timestamp)
+                else:
+                    formatted_time = ''
+
+                # 处理内容
+                text_content = ''
+                if isinstance(content, str):
+                    text_content = content
+                elif isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and part.get('type') == 'text':
+                            text_content += part.get('text', '')
+
+                # 用户消息：提取实际文本
+                if role == 'user' and text_content:
+                    text_content = extract_user_message(text_content)
+
+                # 只保留有内容的消息
+                if role in ('user', 'assistant') and text_content:
+                    messages.append({
+                        'id': msg.get('id', ''),
+                        'timestamp': formatted_time,
+                        'role': role,
+                        'text': text_content,
+                        'thinking': ''
+                    })
+
+            return jsonify({
+                'success': True,
+                'data': messages
+            })
+
+        # 活跃会话：使用原有逻辑
         # 首先获取会话列表找到 session_key
         sessions_result = sync_call('sessions.list', {'agentId': agent_id})
         sessions = sessions_result.get('sessions', []) if sessions_result else []
@@ -4664,9 +4794,246 @@ def generate_image():
     try:
         generator = get_image_generator()
         result = generator.generate(prompt, size=size, n=n)
+
+        # 保存到历史记录
+        try:
+            user = get_current_user()
+            user_id = user.get('user_id') if user else None
+
+            import json
+            db.insert('image_generation_history', {
+                'user_id': user_id,
+                'prompt': prompt,
+                'size': size,
+                'n': n,
+                'images': json.dumps(result.get('images', []))
+            })
+        except Exception as e:
+            logger.warning(f"保存历史记录失败: {e}")
+
         return jsonify({'success': True, 'data': result})
     except Exception as e:
         logger.error(f"图片生成失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/image-generator/history', methods=['GET'])
+@require_auth
+def get_image_history():
+    """获取图片生成历史"""
+    try:
+        user = get_current_user()
+        user_id = user.get('user_id')
+
+        # 获取最近的 50 条记录
+        history = db.fetch_all(
+            """SELECT * FROM image_generation_history
+               WHERE user_id = ?
+               ORDER BY created_at DESC
+               LIMIT 50""",
+            (user_id,)
+        )
+
+        import json
+        result = []
+        for item in history:
+            result.append({
+                'id': item['id'],
+                'prompt': item['prompt'],
+                'size': item['size'],
+                'n': item['n'],
+                'images': json.loads(item['images']),
+                'created_at': item['created_at']
+            })
+
+        return jsonify({'success': True, 'data': result})
+    except Exception as e:
+        logger.error(f"获取历史记录失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/image-generator/history/<int:history_id>', methods=['DELETE'])
+@require_auth
+def delete_image_history(history_id):
+    """删除图片生成历史"""
+    try:
+        user = get_current_user()
+        user_id = user.get('user_id')
+
+        # 只能删除自己的历史
+        db.execute(
+            "DELETE FROM image_generation_history WHERE id = ? AND user_id = ?",
+            (history_id, user_id)
+        )
+
+        return jsonify({'success': True, 'message': '删除成功'})
+    except Exception as e:
+        logger.error(f"删除历史记录失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==================== 模型提供商管理 ====================
+
+@app.route('/api/model-providers', methods=['GET'])
+@require_auth
+def list_model_providers():
+    """获取所有模型提供商"""
+    try:
+        providers = db.fetch_all(
+            "SELECT * FROM model_providers ORDER BY created_at DESC"
+        )
+
+        result = []
+        for p in providers:
+            result.append({
+                'id': p['id'],
+                'name': p['name'],
+                'display_name': p['display_name'],
+                'base_url': p['base_url'],
+                'api_key_env': p['api_key_env'],
+                'api_type': p['api_type'],
+                'enabled': p['enabled'],
+                'config_json': p['config_json'],
+                'created_at': p['created_at'],
+                'updated_at': p['updated_at']
+            })
+
+        return jsonify({'success': True, 'data': result})
+    except Exception as e:
+        logger.error(f"获取模型提供商失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/model-providers', methods=['POST'])
+@require_auth
+def create_model_provider():
+    """创建模型提供商"""
+    try:
+        data = request.get_json()
+
+        # 验证必填字段
+        required = ['name', 'display_name', 'base_url', 'api_key_env']
+        for field in required:
+            if not data.get(field):
+                return jsonify({'success': False, 'error': f'{field} 是必填字段'}), 400
+
+        # 检查名称是否已存在
+        existing = db.fetch_one(
+            "SELECT id FROM model_providers WHERE name = ?",
+            (data['name'],)
+        )
+        if existing:
+            return jsonify({'success': False, 'error': '提供商名称已存在'}), 400
+
+        # 插入数据
+        provider_id = db.insert('model_providers', {
+            'name': data['name'],
+            'display_name': data['display_name'],
+            'base_url': data['base_url'],
+            'api_key_env': data['api_key_env'],
+            'api_type': data.get('api_type', 'image-generation'),
+            'enabled': 1 if data.get('enabled', True) else 0,
+            'config_json': data.get('config_json', '')
+        })
+
+        log_operation_direct('创建模型提供商', 'model_provider', str(provider_id))
+
+        return jsonify({'success': True, 'data': {'id': provider_id}})
+    except Exception as e:
+        logger.error(f"创建模型提供商失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/model-providers/<int:provider_id>', methods=['PUT'])
+@require_auth
+def update_model_provider(provider_id):
+    """更新模型提供商"""
+    try:
+        data = request.get_json()
+
+        # 检查是否存在
+        existing = db.fetch_one(
+            "SELECT id FROM model_providers WHERE id = ?",
+            (provider_id,)
+        )
+        if not existing:
+            return jsonify({'success': False, 'error': '提供商不存在'}), 404
+
+        # 更新数据
+        update_data = {}
+        if 'display_name' in data:
+            update_data['display_name'] = data['display_name']
+        if 'base_url' in data:
+            update_data['base_url'] = data['base_url']
+        if 'api_key_env' in data:
+            update_data['api_key_env'] = data['api_key_env']
+        if 'api_type' in data:
+            update_data['api_type'] = data['api_type']
+        if 'enabled' in data:
+            update_data['enabled'] = 1 if data['enabled'] else 0
+        if 'config_json' in data:
+            update_data['config_json'] = data['config_json']
+
+        if update_data:
+            db.update('model_providers', update_data, 'id = ?', (provider_id,))
+
+        log_operation_direct('更新模型提供商', 'model_provider', str(provider_id))
+
+        return jsonify({'success': True, 'message': '更新成功'})
+    except Exception as e:
+        logger.error(f"更新模型提供商失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/model-providers/<int:provider_id>', methods=['PATCH'])
+@require_auth
+def patch_model_provider(provider_id):
+    """部分更新模型提供商（如启用/禁用）"""
+    try:
+        data = request.get_json()
+
+        # 检查是否存在
+        existing = db.fetch_one(
+            "SELECT id FROM model_providers WHERE id = ?",
+            (provider_id,)
+        )
+        if not existing:
+            return jsonify({'success': False, 'error': '提供商不存在'}), 404
+
+        # 更新数据
+        update_data = {}
+        if 'enabled' in data:
+            update_data['enabled'] = 1 if data['enabled'] else 0
+
+        if update_data:
+            db.update('model_providers', update_data, 'id = ?', (provider_id,))
+
+        return jsonify({'success': True, 'message': '更新成功'})
+    except Exception as e:
+        logger.error(f"更新模型提供商失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/model-providers/<int:provider_id>', methods=['DELETE'])
+@require_auth
+def delete_model_provider(provider_id):
+    """删除模型提供商"""
+    try:
+        # 检查是否存在
+        existing = db.fetch_one(
+            "SELECT name FROM model_providers WHERE id = ?",
+            (provider_id,)
+        )
+        if not existing:
+            return jsonify({'success': False, 'error': '提供商不存在'}), 404
+
+        db.execute("DELETE FROM model_providers WHERE id = ?", (provider_id,))
+
+        log_operation_direct('删除模型提供商', 'model_provider', str(provider_id))
+
+        return jsonify({'success': True, 'message': '删除成功'})
+    except Exception as e:
+        logger.error(f"删除模型提供商失败: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

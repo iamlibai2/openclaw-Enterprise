@@ -12,18 +12,26 @@ import time
 class ImageGenerator:
     """火山引擎文生图生成器"""
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, base_url: str = "https://ark.cn-beijing.volces.com/api/v3", model: str = "doubao-seedream-5-0-260128", capabilities: dict = None):
         """
         初始化图片生成器
 
         Args:
             api_key: 火山引擎 API Key
+            base_url: API 基础 URL
+            model: 模型 ID
+            capabilities: 模型能力配置
         """
         self.client = OpenAI(
-            base_url="https://ark.cn-beijing.volces.com/api/v3",
+            base_url=base_url,
             api_key=api_key
         )
-        self.model = "doubao-seedream-5-0-260128"
+        self.model = model
+        self.capabilities = capabilities or {
+            "sizes": ["2k", "4k"],
+            "maxImages": 4,
+            "watermark": False
+        }
 
     def generate(
         self,
@@ -48,9 +56,12 @@ class ImageGenerator:
             }
         """
         # 尺寸格式校验：火山引擎要求至少 3686400 像素
-        valid_sizes = ["2k", "4k"]
+        valid_sizes = self.capabilities.get('sizes', ["2k", "4k"])
         if size not in valid_sizes:
-            size = "2k"
+            size = valid_sizes[0]
+
+        # 获取 watermark 配置
+        watermark = self.capabilities.get('watermark', False)
 
         response = self.client.images.generate(
             model=self.model,
@@ -58,7 +69,7 @@ class ImageGenerator:
             size=size,
             n=n,
             response_format=response_format,
-            extra_body={"watermark": False}
+            extra_body={"watermark": watermark}
         )
 
         images = []
@@ -123,10 +134,50 @@ _image_generator: Optional[ImageGenerator] = None
 
 
 def get_image_generator() -> ImageGenerator:
-    """获取图片生成器实例"""
+    """从数据库配置和环境变量获取图片生成器实例"""
     global _image_generator
     if _image_generator is None:
-        from settings import settings
-        api_key = settings.VOLCENGINE_API_KEY
-        _image_generator = ImageGenerator(api_key)
+        import os
+        from database import db
+
+        # 从数据库查询火山引擎配置
+        provider = db.fetch_one(
+            "SELECT * FROM model_providers WHERE name = ? AND enabled = 1",
+            ('volcengine',)
+        )
+
+        if not provider:
+            raise ValueError("数据库中未找到启用的 volcengine provider")
+
+        # 从环境变量读取 API Key
+        api_key_env = provider['api_key_env']
+        api_key = os.environ.get(api_key_env)
+
+        if not api_key:
+            raise ValueError(
+                f"请设置环境变量 {api_key_env}，"
+                f"例如: export {api_key_env}='your-api-key'"
+            )
+
+        base_url = provider['base_url']
+
+        # 解析模型配置
+        import json
+        config = json.loads(provider['config_json']) if provider['config_json'] else {}
+        models = config.get('models', [])
+
+        if not models:
+            raise ValueError("volcengine provider 未配置模型")
+
+        # 使用第一个模型
+        model_config = models[0]
+        model_id = model_config.get('id', 'doubao-seedream-5-0-260128')
+        capabilities = model_config.get('capabilities', {
+            "sizes": ["2k", "4k"],
+            "maxImages": 4,
+            "watermark": False
+        })
+
+        _image_generator = ImageGenerator(api_key, base_url, model_id, capabilities)
+
     return _image_generator

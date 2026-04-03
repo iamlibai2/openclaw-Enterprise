@@ -85,11 +85,77 @@
         </div>
       </div>
     </div>
+
+    <!-- 创作足迹 -->
+    <div v-if="history.length > 0" class="history-section">
+      <div class="history-header">
+        <h3>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <polyline points="12 6 12 12 16 14"/>
+          </svg>
+          创作足迹
+        </h3>
+        <span class="history-count">{{ history.length }} 次创作</span>
+      </div>
+
+      <div class="history-grid">
+        <div
+          v-for="(item, idx) in history"
+          :key="item.id"
+          class="history-card"
+          :style="{ animationDelay: `${idx * 0.05}s` }"
+        >
+          <div class="history-preview" @click="showHistoryDetail(item)">
+            <img :src="item.images[0]?.url" />
+            <div class="history-meta">
+              <span class="history-size">{{ item.size.toUpperCase() }}</span>
+              <span class="history-count-badge">×{{ item.n }}</span>
+            </div>
+          </div>
+          <div class="history-info">
+            <p class="history-prompt" :title="item.prompt">{{ item.prompt }}</p>
+            <div class="history-footer">
+              <span class="history-time">{{ formatTime(item.created_at) }}</span>
+              <button class="history-delete" @click="deleteHistory(item.id)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 历史详情弹窗 -->
+    <transition name="fade">
+      <div v-if="selectedHistory" class="modal-overlay" @click="selectedHistory = null">
+        <div class="modal-content" @click.stop>
+          <button class="modal-close" @click="selectedHistory = null">×</button>
+          <div class="modal-images">
+            <img
+              v-for="(img, i) in selectedHistory.images"
+              :key="i"
+              :src="img.url"
+              @click="openImage(img.url)"
+            />
+          </div>
+          <div class="modal-info">
+            <p class="modal-prompt">{{ selectedHistory.prompt }}</p>
+            <div class="modal-meta">
+              <span>{{ selectedHistory.size.toUpperCase() }} · {{ selectedHistory.n }} 张</span>
+              <span>{{ formatTime(selectedHistory.created_at) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
 
@@ -99,6 +165,8 @@ const n = ref(1)
 const loading = ref(false)
 const images = ref<{ url: string }[]>([])
 const selectedTemplate = ref('')
+const history = ref<any[]>([])
+const selectedHistory = ref<any>(null)
 
 const templateNames: Record<string, string> = {
   office: '办公场景', logo: '游戏Logo', poster: '产品海报', oil_painting: '油画风格',
@@ -135,6 +203,7 @@ async function generate() {
     if (res.data.success && res.data.data?.images) {
       images.value = res.data.data.images
       ElMessage.success(`成功生成 ${images.value.length} 张图片`)
+      loadHistory()
     } else {
       ElMessage.error(res.data.error || '生成失败')
     }
@@ -145,7 +214,49 @@ async function generate() {
   }
 }
 
-function openImage(url: string) { window.open(url, '_blank') }
+async function loadHistory() {
+  try {
+    const res = await api.get('/image-generator/history')
+    if (res.data.success) {
+      history.value = res.data.data
+    }
+  } catch (err) {
+    console.error('加载历史失败:', err)
+  }
+}
+
+async function deleteHistory(id: number) {
+  try {
+    await api.delete(`/image-generator/history/${id}`)
+    history.value = history.value.filter(h => h.id !== id)
+    ElMessage.success('已删除')
+  } catch (err) {
+    ElMessage.error('删除失败')
+  }
+}
+
+function showHistoryDetail(item: any) {
+  selectedHistory.value = item
+}
+
+function formatTime(time: string) {
+  const date = new Date(time)
+  const now = new Date()
+  const diff = now.getTime() - date.getTime()
+  const minutes = Math.floor(diff / 60000)
+  const hours = Math.floor(diff / 3600000)
+  const days = Math.floor(diff / 86400000)
+
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes} 分钟前`
+  if (hours < 24) return `${hours} 小时前`
+  if (days < 7) return `${days} 天前`
+  return date.toLocaleDateString()
+}
+
+function openImage(url: string) {
+  window.open(url, '_blank')
+}
 
 async function download(url: string, index: number) {
   try {
@@ -157,8 +268,14 @@ async function download(url: string, index: number) {
     link.click()
     URL.revokeObjectURL(link.href)
     ElMessage.success('下载成功')
-  } catch { ElMessage.error('下载失败') }
+  } catch {
+    ElMessage.error('下载失败')
+  }
 }
+
+onMounted(() => {
+  loadHistory()
+})
 </script>
 
 <style scoped>
@@ -417,11 +534,228 @@ async function download(url: string, index: number) {
   color: #fff;
 }
 
+/* 创作足迹 */
+.history-section {
+  position: relative;
+  z-index: 1;
+  margin-top: 20px;
+}
+
+.history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.history-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin: 0;
+}
+
+.history-header h3 svg {
+  color: #6366f1;
+}
+
+.history-count {
+  font-size: 13px;
+  color: #999;
+}
+
+.history-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.history-card {
+  background: rgba(255,255,255,0.7);
+  backdrop-filter: blur(20px);
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.8);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.04);
+  transition: transform 0.2s, box-shadow 0.2s;
+  animation: fade-in 0.5s ease both;
+}
+
+.history-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+}
+
+.history-preview {
+  position: relative;
+  cursor: pointer;
+  aspect-ratio: 4/3;
+  overflow: hidden;
+}
+
+.history-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.3s;
+}
+
+.history-card:hover .history-preview img {
+  transform: scale(1.05);
+}
+
+.history-meta {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 6px;
+}
+
+.history-size,
+.history-count-badge {
+  padding: 4px 10px;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(8px);
+  border-radius: 12px;
+  font-size: 11px;
+  color: #fff;
+  font-weight: 500;
+}
+
+.history-info {
+  padding: 12px;
+}
+
+.history-prompt {
+  font-size: 13px;
+  color: #333;
+  margin: 0 0 8px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.history-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.history-time {
+  font-size: 11px;
+  color: #999;
+}
+
+.history-delete {
+  padding: 4px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: #ccc;
+  transition: color 0.2s;
+  border-radius: 4px;
+}
+
+.history-delete:hover {
+  color: #f56c6c;
+}
+
+/* 弹窗 */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.8);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 40px;
+}
+
+.modal-content {
+  background: #fff;
+  border-radius: 24px;
+  max-width: 900px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  position: relative;
+  animation: scale-in 0.3s ease;
+}
+
+.modal-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0,0,0,0.1);
+  font-size: 24px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+  z-index: 10;
+}
+
+.modal-close:hover {
+  background: rgba(0,0,0,0.2);
+}
+
+.modal-images {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  padding: 24px;
+}
+
+.modal-images img {
+  width: 100%;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.modal-images img:hover {
+  transform: scale(1.02);
+}
+
+.modal-info {
+  padding: 0 24px 24px;
+}
+
+.modal-prompt {
+  font-size: 15px;
+  color: #333;
+  line-height: 1.6;
+  margin: 0 0 12px;
+}
+
+.modal-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 13px;
+  color: #999;
+}
+
 /* 动画 */
 .slide-up-enter-active { transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
 .slide-up-leave-active { transition: all 0.3s ease; }
 .slide-up-enter-from { opacity: 0; transform: translateY(20px); }
 .slide-up-leave-to { opacity: 0; transform: translateY(-10px); }
+
+.fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes float {
@@ -434,6 +768,14 @@ async function download(url: string, index: number) {
   50% { opacity: 1; }
 }
 @keyframes pop-in {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes scale-in {
   from { opacity: 0; transform: scale(0.9); }
   to { opacity: 1; transform: scale(1); }
 }

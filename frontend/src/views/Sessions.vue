@@ -89,19 +89,23 @@
           <div
             class="session-item"
             v-for="session in sessions"
-            :key="session.sessionId"
-            :class="{ active: selectedSession?.sessionId === session.sessionId }"
+            :key="session.sessionId + (session.isReset ? '-reset' : '')"
+            :class="{ active: selectedSession?.sessionId === session.sessionId, reset: session.isReset }"
             @click="selectSession(session)"
           >
             <div class="session-channel">
               <el-tag size="small" effect="plain">{{ session.channel }}</el-tag>
-              <el-tag size="small" :type="session.status === 'running' ? 'warning' : 'success'">
-                {{ session.status }}
+              <el-tag size="small" :type="session.status === 'running' ? 'warning' : session.isReset ? 'info' : 'success'">
+                {{ session.isReset ? '归档' : session.status }}
               </el-tag>
             </div>
             <div class="session-info">
               <div class="session-time">{{ session.updatedAt }}</div>
-              <div class="session-model" v-if="session.model">{{ session.model }}</div>
+              <div class="session-model" v-if="session.model && !session.isReset">{{ session.model }}</div>
+              <div class="session-reset-info" v-if="session.isReset && session.resetAt">
+                <el-icon><Clock /></el-icon>
+                {{ formatResetTime(session.resetAt) }}
+              </div>
             </div>
           </div>
           <div class="empty-tip" v-if="!loadingSessions && sessions.length === 0">
@@ -139,7 +143,7 @@
             <div class="header-actions">
               <span v-if="selectedSession">{{ selectedSession.updatedAt }}</span>
               <el-button
-                v-if="selectedSession"
+                v-if="selectedSession && !selectedSession.isReset"
                 size="small"
                 :type="focusStatus?.enabled ? 'warning' : 'default'"
                 @click="showFocusDialog"
@@ -289,7 +293,7 @@
 <script setup lang="ts">
 import { ref, onMounted, nextTick, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Search, Document } from '@element-plus/icons-vue'
+import { Search, Document, Clock } from '@element-plus/icons-vue'
 import { sessionApi, memoryApi, searchApi, focusApi } from '../api'
 import { marked } from 'marked'
 
@@ -312,6 +316,9 @@ interface Session {
   modelProvider: string
   runtimeMs: number
   childSessions: string[]
+  isReset?: boolean
+  resetAt?: string
+  filename?: string
 }
 
 interface Message {
@@ -473,12 +480,23 @@ async function selectSession(session: Session) {
 
   if (!selectedAgent.value) return
 
-  // 加载 Focus 状态
-  loadFocusStatus(session.sessionKey)
+  // 加载 Focus 状态（只有活跃会话才有）
+  if (!session.isReset) {
+    loadFocusStatus(session.sessionKey)
+  }
 
   loadingMessages.value = true
   try {
-    const res = await sessionApi.messages(selectedAgent.value.id, session.sessionId)
+    // 根据会话类型调用不同的 API
+    const res = await sessionApi.messages(
+      selectedAgent.value.id,
+      session.sessionId,
+      session.isReset ? {
+        isReset: true,
+        filename: session.filename
+      } : undefined
+    )
+
     if (res.data.success) {
       messages.value = res.data.data
       await nextTick()
@@ -595,6 +613,16 @@ function formatSize(size: number): string {
   if (size < 1024) return `${size} B`
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
   return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+function formatResetTime(resetAt: string): string {
+  if (!resetAt) return ''
+  try {
+    const date = new Date(resetAt)
+    return `归档于 ${date.toLocaleDateString('zh-CN')} ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`
+  } catch {
+    return resetAt
+  }
 }
 
 // ==================== Focus Mode 相关 ====================
@@ -929,6 +957,15 @@ onMounted(() => {
   background: #f6ffed;
 }
 
+.session-item.reset {
+  background: #f5f5f5;
+  opacity: 0.85;
+}
+
+.session-item.reset.active {
+  background: #e6e6e6;
+}
+
 .memory-item.active {
   background: #fff7e6;
 }
@@ -946,9 +983,17 @@ onMounted(() => {
 
 .session-count,
 .session-model,
+.session-reset-info,
 .memory-meta {
   font-size: 12px;
   color: #909399;
+}
+
+.session-reset-info {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #c0c4cc;
 }
 
 .session-channel {

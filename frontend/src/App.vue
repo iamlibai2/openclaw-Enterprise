@@ -172,6 +172,10 @@
                     <el-icon><Connection /></el-icon>
                     <span>Gateway 管理</span>
                   </el-menu-item>
+                  <el-menu-item index="/model-providers">
+                    <el-icon><Cpu /></el-icon>
+                    <span>模型配置</span>
+                  </el-menu-item>
                   <el-menu-item index="/users" v-if="hasPermission('users', 'read')">
                     <el-icon><Avatar /></el-icon>
                     <span>用户管理</span>

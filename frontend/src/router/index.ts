@@ -160,6 +160,12 @@ const routes = [
     component: () => import('../views/ImageGenerator.vue'),
     meta: { requiresAuth: true }
   },
+  {
+    path: '/model-providers',
+    name: 'ModelProviders',
+    component: () => import('../views/ModelProviders.vue'),
+    meta: { requiresAuth: true }
+  },
   // 403 无权限
   {
     path: '/403',
