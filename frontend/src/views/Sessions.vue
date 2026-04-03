@@ -447,10 +447,13 @@ async function loadSessions() {
   loadingSessions.value = true
   try {
     const res = await sessionApi.list(selectedAgent.value.id)
+    console.log('Sessions API response:', res.data)
     if (res.data.success) {
       sessions.value = res.data.data
+      console.log(`加载了 ${sessions.value.length} 个会话，其中归档: ${sessions.value.filter(s => s.isReset).length}`)
     }
   } catch (e: any) {
+    console.error('加载会话列表失败:', e)
     ElMessage.error('加载会话列表失败')
   } finally {
     loadingSessions.value = false
@@ -618,7 +621,13 @@ function formatSize(size: number): string {
 function formatResetTime(resetAt: string): string {
   if (!resetAt) return ''
   try {
-    const date = new Date(resetAt)
+    // resetAt 格式: 2026-04-01T01-23-40.268Z (时间用 - 分隔)
+    // 需要转换为标准 ISO 格式
+    const normalized = resetAt.replace(/T(\d+)-(\d+)-(\d+)/, 'T$1:$2:$3')
+    const date = new Date(normalized)
+    if (isNaN(date.getTime())) {
+      return resetAt
+    }
     return `归档于 ${date.toLocaleDateString('zh-CN')} ${date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`
   } catch {
     return resetAt

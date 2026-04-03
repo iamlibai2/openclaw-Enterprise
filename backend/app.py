@@ -2865,39 +2865,51 @@ def get_session_messages(agent_id, session_id):
                         'error': f'归档会话文件不存在 (session: {session_id[:8]}...)'
                     }), 404
 
-            # 使用 sessionFiles.get 读取归档文件
+            # 使用 sessionFiles.get 读取归档文件，使用 raw 格式
             result_data = sync_call('sessionFiles.get', {
                 'agentId': agent_id,
                 'filename': filename,
-                'format': 'messages'
+                'format': 'raw'
             })
 
             if not result_data:
                 return jsonify({'success': True, 'data': []})
 
-            # sessionFiles.get 返回的 messages 格式与 sessions.get 不同，需要适配
-            raw_messages = result_data.get('messages', [])
+            # 解析 raw 格式的 lines
+            raw_lines = result_data.get('lines', [])
             messages = []
 
-            for msg in raw_messages:
-                # sessionFiles.get 的 message 格式
-                role = msg.get('role', '')
-                content = msg.get('content', '')
-                timestamp = msg.get('timestamp', '')
+            for line in raw_lines:
+                if not isinstance(line, dict):
+                    continue
+
+                # 只处理 message 类型的行
+                if line.get('type') != 'message':
+                    continue
+
+                msg_data = line.get('message', {})
+                if not msg_data:
+                    continue
+
+                role = msg_data.get('role', '')
+                content = msg_data.get('content', '')
+                timestamp = line.get('timestamp', '')
 
                 # 格式化时间
+                formatted_time = ''
                 if timestamp:
                     try:
-                        # timestamp 可能是 ISO 格式或毫秒时间戳
+                        # timestamp 可能是 ISO 格式，如 2026-03-31T09:43:26.291Z
                         if isinstance(timestamp, str):
+                            # 处理时间用 - 分隔的情况
+                            normalized = timestamp.replace('T', 'T').replace('-', ':', 2).replace('-', ':', 2)
                             ts_date = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                         else:
                             ts_date = datetime.fromtimestamp(timestamp / 1000)
                         formatted_time = ts_date.strftime('%Y-%m-%d %H:%M:%S')
-                    except:
+                    except Exception as e:
+                        logger.debug(f"时间解析失败: {timestamp}, {e}")
                         formatted_time = str(timestamp)
-                else:
-                    formatted_time = ''
 
                 # 处理内容
                 text_content = ''
@@ -2915,7 +2927,7 @@ def get_session_messages(agent_id, session_id):
                 # 只保留有内容的消息
                 if role in ('user', 'assistant') and text_content:
                     messages.append({
-                        'id': msg.get('id', ''),
+                        'id': line.get('id', ''),
                         'timestamp': formatted_time,
                         'role': role,
                         'text': text_content,

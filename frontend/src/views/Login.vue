@@ -4,7 +4,6 @@
     <div class="bg-decoration">
       <div class="bg-circle circle-1"></div>
       <div class="bg-circle circle-2"></div>
-      <div class="bg-circle circle-3"></div>
     </div>
 
     <div class="login-card">
@@ -206,7 +205,7 @@ async function handleLogin() {
   overflow: hidden;
 }
 
-/* 背景装饰 */
+/* 背景装饰 - 简化为纯色圆形 */
 .bg-decoration {
   position: absolute;
   inset: 0;
@@ -217,8 +216,7 @@ async function handleLogin() {
 .bg-circle {
   position: absolute;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(40px);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .circle-1 {
@@ -226,7 +224,6 @@ async function handleLogin() {
   height: 600px;
   top: -200px;
   right: -100px;
-  animation: float 20s ease-in-out infinite;
 }
 
 .circle-2 {
@@ -234,16 +231,6 @@ async function handleLogin() {
   height: 400px;
   bottom: -150px;
   left: -100px;
-  animation: float 25s ease-in-out infinite reverse;
-}
-
-.circle-3 {
-  width: 300px;
-  height: 300px;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  animation: pulse 15s ease-in-out infinite;
 }
 
 /* 登录卡片 */
@@ -268,18 +255,6 @@ async function handleLogin() {
   justify-content: space-between;
   color: #fff;
   position: relative;
-  overflow: hidden;
-}
-
-.brand-section::before {
-  content: '';
-  position: absolute;
-  top: -50%;
-  right: -50%;
-  width: 100%;
-  height: 100%;
-  background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
-  animation: rotate 30s linear infinite;
 }
 
 .brand-content {
@@ -295,12 +270,10 @@ async function handleLogin() {
   width: 80px;
   height: 80px;
   background: rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(10px);
   border-radius: 20px;
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: float 6s ease-in-out infinite;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
 }
 
@@ -340,7 +313,6 @@ async function handleLogin() {
   width: 48px;
   height: 48px;
   background: rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(10px);
   border-radius: 12px;
   display: flex;
   align-items: center;
@@ -454,21 +426,6 @@ async function handleLogin() {
 }
 
 /* 动画 */
-@keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-20px); }
-}
-
-@keyframes rotate {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-@keyframes pulse {
-  0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 0.3; }
-  50% { transform: translate(-50%, -50%) scale(1.2); opacity: 0.5; }
-}
-
 @keyframes scale-in {
   from { opacity: 0; transform: scale(0.9); }
   to { opacity: 1; transform: scale(1); }
