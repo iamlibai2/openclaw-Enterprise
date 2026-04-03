@@ -1,17 +1,17 @@
-# OpenClaw 插件开发指南 - Memory API 示例
+# OpenClaw 插件开发指南 - Memory & Session API
 
 ## 概述
 
-本文档记录了 Memory API 插件的开发过程，作为 OpenClaw 插件开发的参考示例。
+本文档记录了 Memory & Session API 插件的开发过程，作为 OpenClaw 插件开发的参考示例。
 
 ## 背景
 
-Admin UI 改造为 WebSocket 架构后，需要远程访问 Agent 的记忆文件。Gateway 没有内置的 memory API，因此需要开发自定义插件。
+Admin UI 改造为 WebSocket 架构后，需要远程访问 Agent 的记忆文件和会话记录。Gateway 内置的 `sessions.list` 和 `sessions.get` 方法只读取当前活跃的会话，而 sessions 目录下还有大量 `.jsonl.reset.*` 归档文件保存着历史聊天记录。因此开发了此插件，支持读取记忆文件、活跃会话和归档会话。
 
-## 插件结构
+## 插件位置
 
 ```
-memory-api/
+~/.openclaw/extensions/memory-api/
 ├── package.json          # NPM 包配置
 ├── openclaw.plugin.json  # OpenClaw 插件元数据
 ├── index.ts              # 插件入口代码
@@ -22,159 +22,290 @@ memory-api/
 └── README.md             # 使用文档
 ```
 
-## 关键文件内容
+## 文件存储结构
 
-### package.json
+### Memory 文件位置
 
+```
+~/.openclaw/
+├── workspace/            # main agent
+│   └── memory/
+│       ├── 2026-03-28.md
+│       └── 2026-03-29.md
+├── workspace-aqiang/     # aqiang agent
+│   └── memory/
+│       └── ...
+└── workspace-xiaomei/    # xiaomei agent
+    └── memory/
+        └── ...
+```
+
+### Session 文件位置
+
+```
+~/.openclaw/agents/{agentId}/sessions/
+├── sessions.json                           # 会话索引
+├── {sessionId}.jsonl                       # 活跃会话
+├── {sessionId}.jsonl.reset.{timestamp}     # 归档会话
+└── ...
+```
+
+**示例**：
+```
+~/.openclaw/agents/aqiang/sessions/
+├── sessions.json
+├── e004b058-0256-4c9b-b523-f55f674d36b5.jsonl          # 活跃
+├── 9934c0ab-0e87-416d-8fc0-f4c337f29866.jsonl.reset.2026-03-31T10-16-41.215Z  # 归档
+└── ...
+```
+
+## API 接口
+
+### Memory API
+
+#### memory.list
+
+列出 Agent 的记忆文件：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| agentId | string | 是 | Agent ID（如 "main", "aqiang"） |
+
+**返回**：
 ```json
 {
-  "name": "openclaw-memory-api",
-  "version": "1.0.0",
-  "type": "module",
-  "main": "dist/index.js",
-  "dependencies": {
-    "openclaw": "^2026.3.23-2"
-  },
-  "devDependencies": {
-    "typescript": "^5.0.0"
-  },
-  "scripts": {
-    "build": "tsc"
-  }
+  "files": [
+    {
+      "name": "2026-03-28.md",
+      "path": "/home/user/.openclaw/workspace/memory/2026-03-28.md",
+      "size": 1234,
+      "modifiedAt": "2026-03-28T10:00:00.000Z"
+    }
+  ]
 }
 ```
 
-### openclaw.plugin.json
+#### memory.get
 
+获取指定记忆文件内容：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| agentId | string | 是 | Agent ID |
+| name | string | 是 | 文件名（如 "2026-03-28.md"） |
+
+**返回**：
 ```json
 {
-  "id": "memory-api",
-  "name": "Memory API",
-  "description": "Provides Gateway RPC methods for reading agent memory files",
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
+  "content": "# 2026-03-28\n\n今日工作...",
+  "size": 1234,
+  "modifiedAt": "2026-03-28T10:00:00.000Z"
 }
 ```
 
-### index.ts（核心代码）
+### Session Files API
 
-```typescript
-import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import * as fs from "fs";
-import * as path from "path";
+#### sessionFiles.list
 
-const OPENCLAW_DIR = process.env.OPENCLAW_DIR || path.join(process.env.HOME || "", ".openclaw");
+列出所有会话文件（活跃 + 归档）：
 
-function getAgentWorkspace(agentId: string): string | null {
-  const configPath = path.join(OPENCLAW_DIR, "openclaw.json");
-  if (!fs.existsSync(configPath)) return null;
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| agentId | string | 是 | - | Agent ID |
+| includeReset | boolean | 否 | true | 是否包含归档文件 |
 
-  try {
-    const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    const agents = config?.agents?.list || [];
-    const agent = agents.find((a: any) => a.id === agentId);
-
-    if (agent?.workspace) return agent.workspace;
-
-    // Default workspace pattern
-    if (agentId === "main") return path.join(OPENCLAW_DIR, "workspace");
-    return path.join(OPENCLAW_DIR, `workspace-${agentId}`);
-  } catch {
-    return null;
-  }
+**返回**：
+```json
+{
+  "sessions": [
+    {
+      "key": "agent:aqiang:feishu:aqiang:direct:ou_xxx",
+      "sessionId": "e004b058-0256-4c9b-b523-f55f674d36b5",
+      "updatedAt": 1774985840056,
+      "updatedAtISO": "2026-03-28T10:00:00.000Z",
+      "chatType": "direct",
+      "lastChannel": "feishu",
+      "sessionFile": "/home/user/.openclaw/agents/aqiang/sessions/e004b058....jsonl",
+      "status": "active"
+    }
+  ],
+  "resetFiles": [
+    {
+      "filename": "9934c0ab-0e87-416d-8fc0-f4c337f29866.jsonl.reset.2026-03-31T10-16-41.215Z",
+      "sessionId": "9934c0ab-0e87-416d-8fc0-f4c337f29866",
+      "resetAt": "2026-03-31T10-16-41.215Z",
+      "size": 700491,
+      "modifiedAt": "2026-03-31T10:16:41.215Z",
+      "status": "reset"
+    }
+  ],
+  "totalActive": 4,
+  "totalReset": 4
 }
+```
 
-export default definePluginEntry({
-  id: "memory-api",
-  name: "Memory API",
-  description: "Provides Gateway RPC methods for reading agent memory files",
+#### sessionFiles.listReset
 
-  register(api) {
-    // memory.list - 列出记忆文件
-    api.registerGatewayMethod("memory.list", async (opts: any) => {
-      const params = opts.params || {};
-      const agentId = params.agentId;
+只列出归档会话文件：
 
-      if (!agentId) {
-        opts.respond(false, undefined, { message: "agentId is required" });
-        return;
-      }
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| agentId | string | 是 | Agent ID |
 
-      const workspace = getAgentWorkspace(agentId);
-      if (!workspace) {
-        opts.respond(false, undefined, { message: `Agent ${agentId} not found` });
-        return;
-      }
+**返回**：
+```json
+{
+  "files": [
+    {
+      "filename": "9934c0ab-0e87-416d-8fc0-f4c337f29866.jsonl.reset.2026-03-31T10-16-41.215Z",
+      "sessionId": "9934c0ab-0e87-416d-8fc0-f4c337f29866",
+      "resetAt": "2026-03-31T10-16-41.215Z",
+      "size": 700491,
+      "modifiedAt": "2026-03-31T10:16:41.215Z"
+    }
+  ],
+  "total": 4
+}
+```
 
-      const memoryDir = path.join(workspace, "memory");
-      if (!fs.existsSync(memoryDir)) {
-        opts.respond(true, { files: [] });
-        return;
-      }
+#### sessionFiles.get
 
-      const files = fs.readdirSync(memoryDir)
-        .filter(name => name.endsWith(".md"))
-        .map(name => {
-          const filePath = path.join(memoryDir, name);
-          const stat = fs.statSync(filePath);
-          return {
-            name,
-            path: filePath,
-            size: stat.size,
-            modifiedAt: stat.mtime.toISOString(),
-          };
-        })
-        .sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
+读取会话文件内容（支持活跃和归档文件）：
 
-      opts.respond(true, { files });
-    });
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| agentId | string | 是 | - | Agent ID |
+| filename | string | 是 | - | 文件名或 sessionId |
+| format | string | 否 | "raw" | "raw" 或 "messages" |
 
-    // memory.get - 获取文件内容
-    api.registerGatewayMethod("memory.get", async (opts: any) => {
-      const params = opts.params || {};
-      const agentId = params.agentId;
-      const name = params.name;
+**filename 格式**：
+- sessionId（如 `e004b058-0256-4c9b-b523-f55f674d36b5`）→ 自动匹配 .jsonl 文件
+- 完整文件名（如 `xxx.jsonl.reset.xxx`）→ 直接读取
 
-      // 参数校验
-      if (!agentId || !name) {
-        opts.respond(false, undefined, { message: "agentId and name are required" });
-        return;
-      }
+**返回（raw 格式）**：
+```json
+{
+  "lines": [
+    {"type": "session", "version": 1, "id": "xxx", ...},
+    {"type": "message", "role": "user", "content": "...", ...},
+    {"type": "message", "role": "assistant", "content": "...", ...}
+  ],
+  "totalLines": 152,
+  "size": 700491,
+  "file": "xxx.jsonl.reset.xxx"
+}
+```
 
-      // 安全检查：防止路径遍历
-      if (!name.endsWith(".md") || name.includes("..") || name.includes("/")) {
-        opts.respond(false, undefined, { message: "Invalid file name" });
-        return;
-      }
+**返回（messages 格式）**：
+```json
+{
+  "messages": [
+    {"role": "user", "content": "...", "timestamp": "..."},
+    {"role": "assistant", "content": "...", "timestamp": "..."}
+  ],
+  "totalLines": 152,
+  "messageCount": 138,
+  "size": 700491,
+  "file": "xxx.jsonl.reset.xxx"
+}
+```
 
-      const workspace = getAgentWorkspace(agentId);
-      if (!workspace) {
-        opts.respond(false, undefined, { message: `Agent ${agentId} not found` });
-        return;
-      }
+#### sessionFiles.search
 
-      const filePath = path.join(workspace, "memory", name);
-      if (!fs.existsSync(filePath)) {
-        opts.respond(false, undefined, { message: `Memory file ${name} not found` });
-        return;
-      }
+搜索会话内容（包括归档文件）：
 
-      const stat = fs.statSync(filePath);
-      const content = fs.readFileSync(filePath, "utf-8");
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| agentId | string | 是 | - | Agent ID |
+| query | string | 是 | - | 搜索关键词 |
+| limit | number | 否 | 10 | 最大结果数 |
+| searchReset | boolean | 否 | true | 是否搜索归档文件 |
 
-      opts.respond(true, {
-        content,
-        size: stat.size,
-        modifiedAt: stat.mtime.toISOString(),
-      });
-    });
+**返回**：
+```json
+{
+  "results": [
+    {
+      "filename": "e004b058-0256-4c9b-b523-f55f674d36b5.jsonl",
+      "sessionId": "e004b058-0256-4c9b-b523-f55f674d36b5",
+      "isReset": false,
+      "resetAt": null,
+      "size": 127393,
+      "modifiedAt": "2026-04-01T03:37:00.000Z",
+      "matchCount": 3,
+      "matches": [...]
+    },
+    {
+      "filename": "9934c0ab-0e87-416d-8fc0-f4c337f29866.jsonl.reset.2026-03-31T10-16-41.215Z",
+      "sessionId": "9934c0ab-0e87-416d-8fc0-f4c337f29866",
+      "isReset": true,
+      "resetAt": "2026-03-31T10-16-41.215Z",
+      "size": 700491,
+      "modifiedAt": "2026-03-31T02:26:00.000Z",
+      "matchCount": 5,
+      "matches": [...]
+    }
+  ],
+  "total": 2,
+  "query": "飞书"
+}
+```
 
-    api.logger.info("Memory API plugin registered: memory.list, memory.get");
-  },
-});
+## 使用示例
+
+### Python 调用
+
+```python
+from gateway_sync import sync_call
+
+# 列出记忆文件
+result = sync_call('memory.list', {'agentId': 'aqiang'})
+for f in result['files']:
+    print(f"{f['name']}: {f['size']} bytes")
+
+# 列出归档会话
+result = sync_call('sessionFiles.listReset', {'agentId': 'aqiang'})
+for f in result['files']:
+    print(f"{f['filename']}: {f['size']} bytes")
+
+# 读取归档会话内容
+result = sync_call('sessionFiles.get', {
+    'agentId': 'aqiang',
+    'filename': '9934c0ab-0e87-416d-8fc0-f4c337f29866.jsonl.reset.2026-03-31T10-16-41.215Z',
+    'format': 'messages'
+})
+print(f"Found {result['messageCount']} messages")
+
+# 搜索会话
+result = sync_call('sessionFiles.search', {
+    'agentId': 'aqiang',
+    'query': '飞书',
+    'limit': 10
+})
+for r in result['results']:
+    print(f"{r['filename']}: {r['matchCount']} matches, isReset={r['isReset']}")
+```
+
+### 后端集成
+
+```python
+# backend/app.py
+
+@app.route('/api/agents/<agent_id>/sessions/history')
+def get_session_history(agent_id):
+    """获取历史会话（包括归档）"""
+    from gateway_sync import sync_call
+
+    # 获取归档会话列表
+    reset_result = sync_call('sessionFiles.listReset', {'agentId': agent_id})
+
+    return jsonify({
+        'success': True,
+        'data': {
+            'resetFiles': reset_result['files'],
+            'total': reset_result['total']
+        }
+    })
 ```
 
 ## 重要技术点
@@ -196,40 +327,57 @@ api.registerGatewayMethod("memory.list", async (opts: any) => {
 });
 ```
 
-`GatewayRequestHandler` 类型定义为：
-```typescript
-type GatewayRequestHandler = (opts: GatewayRequestHandlerOptions) => Promise<void> | void;
-
-type GatewayRequestHandlerOptions = {
-  req: RequestFrame;
-  params: Record<string, unknown>;
-  client: GatewayClient | null;
-  respond: RespondFn;
-  context: GatewayRequestContext;
-};
-
-type RespondFn = (ok: boolean, payload?: unknown, error?: ErrorShape) => void;
-```
-
-### 2. 参数获取
-
-参数在 `opts.params` 中，而不是直接传入：
-```typescript
-const params = opts.params || {};
-const agentId = params.agentId;
-```
-
-### 3. 安全考虑
+### 2. 安全防护
 
 - **路径遍历防护**：禁止 `..` 和 `/` 在文件名中
-- **文件类型限制**：只允许 `.md` 文件
-- **只读访问**：不支持写入操作
+- **文件类型限制**：Memory 只允许 `.md` 文件
+- **Session ID 格式校验**：必须是 UUID 格式
+- **路径解析校验**：使用 `path.resolve` 验证路径在允许目录内
 
-### 4. Agent Workspace 解析
+```typescript
+// 路径遍历防护
+if (name.includes("..") || name.includes("/")) {
+  opts.respond(false, undefined, { message: "Invalid file name" });
+  return;
+}
 
-从 `openclaw.json` 配置获取 agent 的 workspace：
-- 如果 agent 有显式配置 `workspace`，使用配置值
-- 否则使用默认模式：`workspace-{agentId}` 或 `workspace`（main agent）
+// 路径解析校验
+const resolvedPath = path.resolve(sessionFile);
+if (!resolvedPath.startsWith(sessionsDir)) {
+  opts.respond(false, undefined, { message: "Invalid file path" });
+  return;
+}
+```
+
+### 3. Reset 文件名解析
+
+Reset 文件命名格式：`{sessionId}.jsonl.reset.{ISO-timestamp}`
+
+```typescript
+function parseResetFilename(filename: string): { sessionId: string; resetAt: string } | null {
+  const match = filename.match(
+    /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl\.reset\.(.+)$/i
+  );
+  if (match) {
+    return {
+      sessionId: match[1],
+      resetAt: match[2],
+    };
+  }
+  return null;
+}
+```
+
+### 4. 避免方法名冲突
+
+Gateway 内置了 `sessions.list` 和 `sessions.get` 方法，因此本插件使用 `sessionFiles.*` 前缀避免覆盖：
+
+| 插件方法 | Gateway 内置方法 |
+|---------|-----------------|
+| `sessionFiles.list` | `sessions.list` |
+| `sessionFiles.get` | `sessions.get` |
+| `sessionFiles.listReset` | - |
+| `sessionFiles.search` | - |
 
 ## 安装配置
 
@@ -246,13 +394,9 @@ npm run build
 ```json
 {
   "plugins": {
-    "allow": [
-      "memory-api"
-    ],
+    "allow": ["memory-api"],
     "load": {
-      "paths": [
-        "/home/user/.openclaw/extensions/memory-api"
-      ]
+      "paths": ["/home/user/.openclaw/extensions/memory-api"]
     },
     "entries": {
       "memory-api": {
@@ -275,47 +419,29 @@ npm run build
 openclaw gateway restart
 ```
 
-## API 使用
-
-### memory.list
-
-列出 Agent 的记忆文件：
-
-```python
-from gateway_sync import sync_call
-
-result = sync_call('memory.list', {'agentId': 'main'})
-# 返回: {'files': [{'name', 'path', 'size', 'modifiedAt'}, ...]}
-```
-
-### memory.get
-
-获取指定记忆文件内容：
-
-```python
-result = sync_call('memory.get', {
-    'agentId': 'main',
-    'name': '2026-03-28.md'
-})
-# 返回: {'content': '...', 'size': 1234, 'modifiedAt': '...'}
-```
-
 ## 调试技巧
 
 ### 检查插件是否加载
 
 ```bash
 # 查看 Gateway 日志
-journalctl -u openclaw-gateway -f | grep plugin
+journalctl -u openclaw-gateway -f | grep "Memory"
+# 或
+tail -f /tmp/gateway.log | grep plugin
 ```
 
 ### 测试 API 方法
 
 ```python
-# Python 测试
 from gateway_sync import sync_call
+
+# 测试 memory.list
 result = sync_call('memory.list', {'agentId': 'main'})
-print(result)
+print(f"Memory files: {len(result.get('files', []))}")
+
+# 测试 sessionFiles.listReset
+result = sync_call('sessionFiles.listReset', {'agentId': 'aqiang'})
+print(f"Reset files: {result.get('total', 0)}")
 ```
 
 ### 常见错误
@@ -323,60 +449,20 @@ print(result)
 | 错误 | 原因 | 解决方案 |
 |-----|-----|---------|
 | `unknown method: memory.list` | 插件未加载 | 检查 `load.paths` 配置 |
+| `unknown method: sessionFiles.list` | 使用了旧版本插件 | 重新构建插件 |
 | TypeScript 类型错误 | handler 返回值 | 使用 `opts.respond()` |
 | `Agent not found` | agentId 错误 | 检查 openclaw.json 中 agents.list |
-
-## 扩展建议
-
-### 添加更多方法
-
-```typescript
-// memory.search - 搜索记忆内容
-api.registerGatewayMethod("memory.search", async (opts: any) => {
-  const { agentId, query } = opts.params || {};
-  // 实现搜索逻辑...
-  opts.respond(true, { results: [...] });
-});
-
-// memory.stats - 记忆统计
-api.registerGatewayMethod("memory.stats", async (opts: any) => {
-  const { agentId } = opts.params || {};
-  // 实现统计逻辑...
-  opts.respond(true, { totalFiles, totalSize, ... });
-});
-```
-
-### 配置化
-
-可以通过 `configSchema` 支持插件配置：
-
-```json
-{
-  "configSchema": {
-    "type": "object",
-    "properties": {
-      "maxFileSize": {
-        "type": "number",
-        "default": 100000
-      }
-    }
-  }
-}
-```
-
-在代码中使用：
-```typescript
-const maxFileSize = api.pluginConfig?.maxFileSize || 100000;
-```
+| `Invalid file path` | 路径遍历攻击 | 检查 filename 参数 |
 
 ## 总结
 
-Memory API 插件展示了 OpenClaw 插件开发的关键要点：
+Memory & Session API 插件展示了 OpenClaw 插件开发的关键要点：
 
 1. **使用 `definePluginEntry`** 定义插件
 2. **使用 `opts.respond()`** 发送响应
 3. **从 `opts.params`** 获取参数
-4. **安全防护** 路径遍历和文件类型
-5. **配置注册** 在 openclaw.json 中启用插件
+4. **安全防护** 路径遍历和文件类型校验
+5. **避免冲突** 使用不同前缀区分内置方法
+6. **配置注册** 在 openclaw.json 中启用插件
 
-此插件使 Admin UI 能够远程访问 Agent 记忆文件，实现了远程部署能力。
+此插件使 Admin UI 能够远程访问 Agent 记忆文件和历史会话记录（包括归档），实现了完整的会话历史查询能力。
