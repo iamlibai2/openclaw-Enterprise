@@ -194,6 +194,15 @@
                 :step="1000"
               />
             </div>
+            <div class="param-item">
+              <span class="param-label">Context Window:</span>
+              <el-input-number
+                v-model="formData.parameters.context_window"
+                :min="1000"
+                :max="200000"
+                :step="1000"
+              />
+            </div>
           </div>
         </el-form-item>
 
@@ -273,7 +282,8 @@ const formData = reactive({
   model_type: 'chat',
   parameters: {
     temperature: 0.7,
-    max_tokens: 2000
+    max_tokens: 4096,
+    context_window: 16000
   },
   enabled: true
 })
@@ -349,7 +359,7 @@ const resetForm = () => {
   formData.api_key = ''
   formData.api_base = ''
   formData.model_type = 'chat'
-  formData.parameters = { temperature: 0.7, max_tokens: 2000 }
+  formData.parameters = { temperature: 0.7, max_tokens: 4096, context_window: 16000 }
   formData.enabled = true
   currentModel.value = null
 }

@@ -114,7 +114,13 @@
             </div>
           </div>
           <div class="card-footer">
-            <el-switch v-model="skill.enabled" @change="toggleSkill(skill)" v-if="canToggle" />
+            <el-switch
+              v-model="skill.enabled"
+              @change="toggleSkill(skill)"
+              :loading="skill.toggling"
+              :disabled="skill.toggling"
+              v-if="canToggle"
+            />
             <div class="actions">
               <el-button size="small" text @click="viewSkill(skill)">
                 <el-icon><View /></el-icon>
@@ -275,6 +281,7 @@ interface Skill {
   canDelete?: boolean
   skillMdContent?: string
   files?: { name: string; size?: number; type: string }[]
+  toggling?: boolean  // 新增：开关 loading 状态
 }
 
 interface AgentSkills {
@@ -444,17 +451,39 @@ async function viewSkill(skill: Skill) {
 }
 
 async function toggleSkill(skill: Skill) {
+  // 防止重复点击
+  if (skill.toggling) return
+
+  const previousState = skill.enabled
+  skill.toggling = true
+
   try {
     const res = await skillApi.toggle(skill.slug, skill.enabled)
     if (res.data.success) {
       ElMessage.success(skill.enabled ? '已启用' : '已禁用')
     } else {
-      skill.enabled = !skill.enabled
-      ElMessage.error(res.data.error)
+      skill.enabled = !skill.enabled  // 恢复原状态
+      const error = res.data.error || '操作失败'
+      // 处理速率限制错误
+      if (error.includes('rate limit') || error.includes('速率')) {
+        ElMessage.warning('操作太频繁，请稍后再试')
+      } else {
+        ElMessage.error(error)
+      }
     }
   } catch (e: any) {
-    skill.enabled = !skill.enabled
-    ElMessage.error('操作失败：' + e.message)
+    skill.enabled = !skill.enabled  // 恢复原状态
+    const error = e.response?.data?.error || e.message || '未知错误'
+    // 处理速率限制错误
+    if (error.includes('rate limit') || error.includes('速率')) {
+      ElMessage.warning('操作太频繁，请稍后再试')
+    } else if (error.includes('Connect call failed')) {
+      ElMessage.error('无法连接到 Gateway，请检查服务状态')
+    } else {
+      ElMessage.error('操作失败：' + error)
+    }
+  } finally {
+    skill.toggling = false
   }
 }
 

@@ -1,16 +1,16 @@
 <template>
   <div class="channels-page">
     <div class="page-header">
-      <h1>渠道管理</h1>
-      <span class="subtitle">管理外部通信渠道与账号配置</span>
+      <h1>Channel 管理</h1>
+      <span class="subtitle">管理外部通信 Channel 与账号配置</span>
     </div>
 
     <!-- 配置向导入口 -->
     <el-card class="wizard-entry-card">
       <div class="wizard-entry">
         <div class="wizard-info">
-          <h3>渠道配置向导</h3>
-          <p>通过向导快速配置飞书、钉钉等渠道</p>
+          <h3>Channel 配置向导</h3>
+          <p>通过向导快速配置飞书、钉钉等 Channel</p>
         </div>
         <div class="wizard-buttons">
           <el-button type="primary" @click="showFeishuWizard">
@@ -25,7 +25,7 @@
       </div>
     </el-card>
 
-    <!-- 渠道列表 -->
+    <!-- Channel 列表 -->
     <div class="channel-list" v-loading="loading">
       <el-card v-for="channel in channels" :key="channel.name" class="channel-card">
         <template #header>
@@ -110,7 +110,7 @@
           </div>
         </div>
 
-        <!-- 渠道配置 -->
+        <!-- Channel 配置 -->
         <div class="channel-config-section">
           <el-collapse>
             <el-collapse-item title="高级配置" name="config">
@@ -229,14 +229,14 @@
     <!-- 删除确认 -->
     <el-dialog v-model="deleteDialogVisible" title="确认删除" width="400px">
       <p>确定要删除账号 <strong>{{ deletingAccount?.id }}</strong> 吗？</p>
-      <p class="hint">渠道: {{ currentChannel?.displayName }}</p>
+      <p class="hint">Channel: {{ currentChannel?.displayName }}</p>
       <template #footer>
         <el-button @click="deleteDialogVisible = false">取消</el-button>
         <el-button type="danger" @click="doDeleteAccount" :loading="deleting">删除</el-button>
       </template>
     </el-dialog>
 
-    <!-- 渠道配置向导 -->
+    <!-- Channel 配置向导 -->
     <ChannelWizard
       v-model="wizardVisible"
       :channel-type="wizardChannelType"
@@ -332,7 +332,7 @@ function getChannelIcon(name: string): string {
   return icons[name] || '📡'
 }
 
-// 加载渠道列表
+// 加载 Channel 列表
 async function loadChannels() {
   loading.value = true
   try {
@@ -342,18 +342,18 @@ async function loadChannels() {
       canEdit.value = res.data.permissions?.can_edit || false
     }
   } catch (e: any) {
-    ElMessage.error('加载渠道列表失败')
+    ElMessage.error('加载 Channel 列表失败')
   } finally {
     loading.value = false
   }
 }
 
-// 切换渠道启用状态
+// 切换 Channel 启用状态
 async function toggleChannel(channel: Channel) {
   try {
     const res = await channelApi.update(channel.name, { enabled: channel.enabled })
     if (res.data.success) {
-      ElMessage.success(channel.enabled ? '渠道已启用' : '渠道已禁用')
+      ElMessage.success(channel.enabled ? 'Channel 已启用' : 'Channel 已禁用')
     } else {
       ElMessage.error(res.data.error || '操作失败')
       channel.enabled = !channel.enabled // 恢复原状态

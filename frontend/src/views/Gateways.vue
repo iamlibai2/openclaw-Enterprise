@@ -87,7 +87,7 @@
           <el-input v-model="formData.name" placeholder="例如：生产环境 Gateway" />
         </el-form-item>
         <el-form-item label="WebSocket 地址" required>
-          <el-input v-model="formData.url" placeholder="ws://127.0.0.1:4444 或 wss://gateway.example.com" />
+          <el-input v-model="formData.url" placeholder="ws://127.0.0.1:18789 或 wss://gateway.example.com" />
         </el-form-item>
         <el-form-item label="认证 Token">
           <el-input v-model="formData.auth_token" type="password" placeholder="可选，用于远程认证" show-password />

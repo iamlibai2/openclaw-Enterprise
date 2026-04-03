@@ -136,7 +136,17 @@
         <template v-if="viewMode === 'sessions'">
           <div class="panel-header">
             <h3>对话记录</h3>
-            <span v-if="selectedSession">{{ selectedSession.updatedAt }}</span>
+            <div class="header-actions">
+              <span v-if="selectedSession">{{ selectedSession.updatedAt }}</span>
+              <el-button
+                v-if="selectedSession"
+                size="small"
+                :type="focusStatus?.enabled ? 'warning' : 'default'"
+                @click="showFocusDialog"
+              >
+                {{ focusStatus?.enabled ? '专注模式已启用' : '专注模式' }}
+              </el-button>
+            </div>
           </div>
           <div class="chat-messages" v-loading="loadingMessages" ref="messagesRef">
             <template v-for="msg in messages" :key="msg.id">
@@ -200,6 +210,79 @@
         </template>
       </div>
     </div>
+
+    <!-- 专注模式对话框 -->
+    <el-dialog
+      v-model="focusDialogVisible"
+      title="专注模式"
+      width="500px"
+    >
+      <div class="focus-dialog-content">
+        <div class="focus-status-card" v-if="focusStatus?.enabled">
+          <el-alert type="success" :closable="false">
+            <template #title>
+              <div class="status-header">
+                <span>专注模式已启用</span>
+                <el-tag size="small" effect="plain">{{ focusStatus.keywords?.length || 0 }} 个关键词</el-tag>
+              </div>
+            </template>
+            <div class="status-details">
+              <div v-if="focusStatus.taskDescription">
+                <strong>任务：</strong>{{ focusStatus.taskDescription }}
+              </div>
+              <div v-if="focusStatus.startedAt">
+                <strong>开始：</strong>{{ formatTime(focusStatus.startedAt) }}
+              </div>
+              <div v-if="focusStatus.messagesRemoved">
+                <strong>已清理：</strong>{{ focusStatus.messagesRemoved }} 条消息
+              </div>
+              <div v-if="focusStatus.tokensSaved">
+                <strong>节省：</strong>{{ focusStatus.tokensSaved }} tokens
+              </div>
+            </div>
+          </el-alert>
+        </div>
+
+        <div class="focus-form" v-if="!focusStatus?.enabled">
+          <el-form label-width="100px">
+            <el-form-item label="任务描述">
+              <el-input
+                v-model="focusTaskDescription"
+                type="textarea"
+                :rows="3"
+                placeholder="描述当前任务，系统会自动提取关键词..."
+              />
+            </el-form-item>
+            <el-form-item label="关键词">
+              <el-select
+                v-model="focusKeywords"
+                multiple
+                filterable
+                allow-create
+                placeholder="自定义关键词（可选）"
+              />
+            </el-form-item>
+            <el-form-item label="立即压缩">
+              <el-switch v-model="focusCompactNow" />
+              <span class="form-tip">启用后立即清理无关上下文</span>
+            </el-form-item>
+          </el-form>
+        </div>
+
+        <div class="focus-actions">
+          <el-button v-if="focusStatus?.enabled" type="danger" @click="clearFocus">
+            清除专注模式
+          </el-button>
+          <el-button v-if="focusStatus?.enabled && !focusCompactNow" type="primary" @click="compactNow">
+            执行压缩
+          </el-button>
+          <el-button v-if="!focusStatus?.enabled" type="primary" @click="enableFocus" :loading="focusLoading">
+            启用专注模式
+          </el-button>
+          <el-button @click="focusDialogVisible = false">关闭</el-button>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -207,7 +290,7 @@
 import { ref, onMounted, nextTick, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search, Document } from '@element-plus/icons-vue'
-import { sessionApi, memoryApi, searchApi } from '../api'
+import { sessionApi, memoryApi, searchApi, focusApi } from '../api'
 import { marked } from 'marked'
 
 interface SessionAgent {
@@ -264,6 +347,15 @@ interface SearchResult {
   }>
 }
 
+interface FocusStatus {
+  enabled: boolean
+  taskDescription?: string
+  keywords?: string[]
+  startedAt?: string
+  messagesRemoved?: number
+  tokensSaved?: number
+}
+
 const agents = ref<SessionAgent[]>([])
 const sessions = ref<Session[]>([])
 const messages = ref<Message[]>([])
@@ -285,6 +377,14 @@ const loadingMemory = ref(false)
 const loadingMemoryContent = ref(false)
 const searching = ref(false)
 const messagesRef = ref<HTMLElement | null>(null)
+
+// Focus Mode 相关
+const focusDialogVisible = ref(false)
+const focusStatus = ref<FocusStatus | null>(null)
+const focusTaskDescription = ref('')
+const focusKeywords = ref<string[]>([])
+const focusCompactNow = ref(true)
+const focusLoading = ref(false)
 
 const renderedMemory = computed(() => {
   if (!memoryContent.value) return ''
@@ -369,8 +469,12 @@ async function loadMemories() {
 async function selectSession(session: Session) {
   selectedSession.value = session
   messages.value = []
+  focusStatus.value = null
 
   if (!selectedAgent.value) return
+
+  // 加载 Focus 状态
+  loadFocusStatus(session.sessionKey)
 
   loadingMessages.value = true
   try {
@@ -491,6 +595,125 @@ function formatSize(size: number): string {
   if (size < 1024) return `${size} B`
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
   return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+// ==================== Focus Mode 相关 ====================
+
+async function loadFocusStatus(sessionKey: string) {
+  try {
+    const res = await focusApi.getStatus(sessionKey)
+    if (res.data.success) {
+      focusStatus.value = res.data.data
+    }
+  } catch (e: any) {
+    console.error('获取专注模式状态失败:', e)
+  }
+}
+
+function showFocusDialog() {
+  if (!selectedSession.value) return
+
+  focusTaskDescription.value = ''
+  focusKeywords.value = []
+  focusCompactNow.value = true
+  focusDialogVisible.value = true
+
+  // 加载当前状态
+  loadFocusStatus(selectedSession.value.sessionKey)
+}
+
+async function enableFocus() {
+  if (!selectedSession.value) return
+
+  focusLoading.value = true
+  try {
+    const res = await focusApi.enable(
+      selectedSession.value.sessionKey,
+      {
+        taskDescription: focusTaskDescription.value,
+        keywords: focusKeywords.value,
+        compactNow: focusCompactNow.value
+      }
+    )
+
+    if (res.data.success) {
+      ElMessage.success(res.data.message || '专注模式已启用')
+      focusStatus.value = res.data.data
+
+      // 如果执行了压缩，刷新消息列表
+      if (focusCompactNow.value && selectedAgent.value) {
+        await loadSessions()
+        if (selectedSession.value) {
+          await selectSession(selectedSession.value)
+        }
+      }
+    } else {
+      ElMessage.error(res.data.error || '启用失败')
+    }
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.error || '启用专注模式失败')
+  } finally {
+    focusLoading.value = false
+  }
+}
+
+async function compactNow() {
+  if (!selectedSession.value) return
+
+  focusLoading.value = true
+  try {
+    const res = await focusApi.compact(
+      selectedSession.value.sessionKey,
+      {
+        taskDescription: focusTaskDescription.value,
+        keywords: focusKeywords.value
+      }
+    )
+
+    if (res.data.success && res.data.compacted) {
+      const result = res.data.data
+      ElMessage.success(`已清理 ${result.details.messagesRemoved} 条消息，节省 ${result.tokensBefore - result.tokensAfter} tokens`)
+
+      // 更新状态
+      if (selectedSession.value) {
+        await loadFocusStatus(selectedSession.value.sessionKey)
+        // 刷新消息列表
+        if (selectedAgent.value) {
+          await loadSessions()
+          if (selectedSession.value) {
+            await selectSession(selectedSession.value)
+          }
+        }
+      }
+    } else {
+      ElMessage.info('无需压缩或压缩失败')
+    }
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.error || '压缩失败')
+  } finally {
+    focusLoading.value = false
+  }
+}
+
+async function clearFocus() {
+  if (!selectedSession.value) return
+
+  focusLoading.value = true
+  try {
+    const res = await focusApi.clear(selectedSession.value.sessionKey)
+
+    if (res.data.success) {
+      ElMessage.success('专注模式已清除')
+      focusStatus.value = null
+      focusDialogVisible.value = false
+    } else {
+      ElMessage.error(res.data.error || '清除失败')
+    }
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.error || '清除专注模式失败')
+  } finally {
+    focusLoading.value = false
+  }
 }
 
 onMounted(() => {
@@ -955,5 +1178,56 @@ onMounted(() => {
 
 :deep(.el-collapse-item__content) {
   padding-bottom: 8px;
+}
+
+/* Focus Mode 样式 */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.focus-dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.focus-status-card {
+  margin-bottom: 16px;
+}
+
+.status-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-details {
+  margin-top: 12px;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.status-details div {
+  margin-bottom: 6px;
+}
+
+.focus-form {
+  padding: 16px 0;
+}
+
+.form-tip {
+  font-size: 12px;
+  color: #909399;
+  margin-left: 8px;
+}
+
+.focus-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid #e8e8e8;
 }
 </style>
