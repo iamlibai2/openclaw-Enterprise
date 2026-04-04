@@ -1,6 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import Agents from '../views/Agents.vue'
+import { ChatPage } from '../chat'
+import { AgentProfilePage, AgentGalleryPage } from '../agent'
 
 const routes = [
   {
@@ -19,6 +21,13 @@ const routes = [
     name: 'Dashboard',
     component: () => import('../views/Dashboard.vue'),
     meta: { requiresAuth: true }
+  },
+  // Agent 对话
+  {
+    path: '/chat',
+    name: 'Chat',
+    component: ChatPage,
+    meta: { requiresAuth: true, permission: 'sessions:read' }
   },
   // 员工管理（一级菜单）
   {
@@ -88,6 +97,26 @@ const routes = [
     name: 'KnowledgeBase',
     component: () => import('../views/KnowledgeBase.vue'),
     meta: { requiresAuth: true }
+  },
+  // 记忆管理
+  {
+    path: '/memories',
+    name: 'Memories',
+    component: () => import('../views/Memories.vue'),
+    meta: { requiresAuth: true, permission: 'memories:read' }
+  },
+  // Agent Profile
+  {
+    path: '/agent-gallery',
+    name: 'AgentGallery',
+    component: AgentGalleryPage,
+    meta: { requiresAuth: true, permission: 'agents:read' }
+  },
+  {
+    path: '/agent/:id',
+    name: 'AgentProfile',
+    component: AgentProfilePage,
+    meta: { requiresAuth: true, permission: 'agents:read' }
   },
   // 工作管理
   {

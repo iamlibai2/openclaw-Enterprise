@@ -1,0 +1,17 @@
+{
+  "name": "行政助理",
+  "id": "admin_assistant",
+  "version": "1.0.0",
+  "description": "专业严谨的行政助理，擅长日程管理、文档整理、会议安排",
+  "components": {
+    "soul": true,
+    "identity": true,
+    "user": true,
+    "skills": false,
+    "tools": true,
+    "model": true,
+    "memory": false
+  },
+  "recommendedSkills": [],
+  "recommendedTools": ["messaging"]
+}

@@ -20,7 +20,7 @@
             <el-scrollbar class="menu-scrollbar">
               <el-menu
                 :default-active="activeMenu"
-                :default-openeds="['organization', 'workflow', 'experience', 'knowledge', 'security-menu', 'monitor', 'openclaw', 'settings']"
+                :default-openeds="['organization', 'workflow', 'agent-management', 'experience', 'knowledge', 'security-menu', 'monitor', 'openclaw', 'settings']"
                 router
                 class="sidebar-menu"
               >
@@ -28,6 +28,12 @@
                 <el-menu-item index="/dashboard">
                   <el-icon><Odometer /></el-icon>
                   <span>工作台</span>
+                </el-menu-item>
+
+                <!-- Agent 对话 -->
+                <el-menu-item index="/chat" v-if="hasPermission('sessions', 'read')">
+                  <el-icon><ChatDotRound /></el-icon>
+                  <span>对话</span>
                 </el-menu-item>
 
                 <!-- 组织管理 -->
@@ -68,9 +74,49 @@
                     <el-icon><Lightning /></el-icon>
                     <span>经验管理</span>
                   </template>
+                  <el-menu-item index="/memories" v-if="hasPermission('memories', 'read')">
+                    <el-icon><Memo /></el-icon>
+                    <span>记忆管理</span>
+                  </el-menu-item>
+                </el-sub-menu>
+
+                <!-- Agent 管理 -->
+                <el-sub-menu index="agent-management">
+                  <template #title>
+                    <el-icon><User /></el-icon>
+                    <span>Agent 管理</span>
+                  </template>
+                  <el-menu-item index="/agent-gallery" v-if="hasPermission('agents', 'read')">
+                    <el-icon><User /></el-icon>
+                    <span>Agent 档案</span>
+                  </el-menu-item>
+                  <el-menu-item index="/agents" v-if="hasPermission('agents', 'read')">
+                    <el-icon><Setting /></el-icon>
+                    <span>Agent 配置</span>
+                  </el-menu-item>
+                  <el-menu-item index="/souls" v-if="hasPermission('agents', 'read')">
+                    <el-icon><MagicStick /></el-icon>
+                    <span>灵魂管理</span>
+                  </el-menu-item>
+                  <el-menu-item index="/soul-inject" v-if="hasPermission('config', 'write')">
+                    <el-icon><Promotion /></el-icon>
+                    <span>灵魂注入</span>
+                  </el-menu-item>
                   <el-menu-item index="/skills-list" v-if="hasPermission('skills', 'read')">
                     <el-icon><Lightning /></el-icon>
-                    <span>Skill 列表</span>
+                    <span>技能配置</span>
+                  </el-menu-item>
+                  <el-menu-item index="/tools" v-if="hasPermission('tools', 'read')">
+                    <el-icon><Tools /></el-icon>
+                    <span>工具配置</span>
+                  </el-menu-item>
+                  <el-menu-item index="/bindings" v-if="hasPermission('bindings', 'read')">
+                    <el-icon><Link /></el-icon>
+                    <span>渠道绑定</span>
+                  </el-menu-item>
+                  <el-menu-item index="/templates" v-if="hasPermission('config', 'read')">
+                    <el-icon><Collection /></el-icon>
+                    <span>Agent 模板</span>
                   </el-menu-item>
                 </el-sub-menu>
 
@@ -124,34 +170,6 @@
                     <el-icon><Box /></el-icon>
                     <span>OpenClaw 管理</span>
                   </template>
-                  <el-menu-item index="/agents" v-if="hasPermission('agents', 'read')">
-                    <el-icon><User /></el-icon>
-                    <span>Agent 管理</span>
-                  </el-menu-item>
-                  <el-menu-item index="/souls" v-if="hasPermission('agents', 'read')">
-                    <el-icon><MagicStick /></el-icon>
-                    <span>灵魂管理</span>
-                  </el-menu-item>
-                  <el-menu-item index="/soul-inject" v-if="hasPermission('config', 'write')">
-                    <el-icon><Promotion /></el-icon>
-                    <span>灵魂注入</span>
-                  </el-menu-item>
-                  <el-menu-item index="/templates" v-if="hasPermission('config', 'read')">
-                    <el-icon><Collection /></el-icon>
-                    <span>模板管理</span>
-                  </el-menu-item>
-                  <el-menu-item index="/config" v-if="hasPermission('config', 'read')">
-                    <el-icon><EditPen /></el-icon>
-                    <span>配置编辑</span>
-                  </el-menu-item>
-                  <el-menu-item index="/bindings" v-if="hasPermission('bindings', 'read')">
-                    <el-icon><Link /></el-icon>
-                    <span>绑定配置</span>
-                  </el-menu-item>
-                  <el-menu-item index="/tools" v-if="hasPermission('tools', 'read')">
-                    <el-icon><Tools /></el-icon>
-                    <span>工具配置</span>
-                  </el-menu-item>
                   <el-menu-item index="/models" v-if="hasPermission('models', 'read')">
                     <el-icon><Cpu /></el-icon>
                     <span>模型配置</span>
@@ -159,6 +177,10 @@
                   <el-menu-item index="/channels" v-if="hasPermission('config', 'read')">
                     <el-icon><ChatLineSquare /></el-icon>
                     <span>Channel 管理</span>
+                  </el-menu-item>
+                  <el-menu-item index="/config" v-if="hasPermission('config', 'read')">
+                    <el-icon><EditPen /></el-icon>
+                    <span>配置编辑</span>
                   </el-menu-item>
                 </el-sub-menu>
 
@@ -315,7 +337,8 @@ import {
   OfficeBuilding,
   Connection,
   ChatLineSquare,
-  Picture
+  Picture,
+  Memo
 } from '@element-plus/icons-vue'
 import { useUserStore } from './stores/user'
 import { gatewayApi, authApi } from './api'
@@ -347,18 +370,22 @@ const roleLabel = computed(() => {
 const pageTitle = computed(() => {
   const titles: Record<string, string> = {
     '/dashboard': '团队工作台',
+    '/chat': 'Agent 对话',
     '/employees': '员工卡片',
     '/departments': '部门管理',
-    '/agents': 'Agent 管理',
+    '/agent-gallery': 'Agent 档案',
+    '/agents': 'Agent 配置',
     '/souls': '灵魂管理',
     '/soul-inject': '灵魂注入',
-    '/templates': '模板管理',
-    '/skills-list': 'Skill 列表',
-    '/bindings': '绑定配置',
+    '/skills-list': '技能配置',
+    '/templates': 'Agent 模板',
+    '/bindings': '渠道绑定',
     '/tools': '工具配置',
     '/models': '模型配置',
+    '/memories': '记忆管理',
     '/knowledge-base': '知识库',
     '/tasks': '任务列表',
+    '/image-generator': '图片生成',
     '/status': '运行状态',
     '/sessions': '会话列表',
     '/logs': '操作日志',
@@ -366,8 +393,15 @@ const pageTitle = computed(() => {
     '/gateways': 'Gateway 管理',
     '/security': '安全设置',
     '/users': '用户管理',
+    '/model-providers': '模型配置',
     '/docs': '帮助文档'
   }
+
+  // 动态路由匹配
+  if (route.path.startsWith('/agent/')) {
+    return 'Agent 档案'
+  }
+
   return titles[route.path] || ''
 })
 

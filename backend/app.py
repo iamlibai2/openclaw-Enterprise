@@ -20,6 +20,7 @@ from logger import setup_logging, get_logger, log_error
 from model_manager import model_manager, PROVIDER_TEMPLATES
 from channel_manager import channel_manager, CHANNEL_TYPES
 from config_sync import config_sync
+from agent_profile import bp as agent_profile_bp
 import subprocess
 import json
 from datetime import datetime, timedelta
@@ -30,6 +31,9 @@ import json5
 
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
+
+# 注册蓝图
+app.register_blueprint(agent_profile_bp)
 
 # 初始化日志系统
 setup_logging(app)
@@ -531,36 +535,54 @@ def get_agent(agent_id):
 @app.route('/api/agents', methods=['POST'])
 @require_permission('agents', 'write')
 def create_agent():
-    """创建 Agent - 通过 WebSocket"""
+    """创建 Agent - 通过修改配置"""
     try:
         data = request.get_json()
 
-        # WebSocket 的 agents.create 参数
         name = data.get('name')
         if not name:
             return jsonify({'success': False, 'error': '缺少 Agent 名称'}), 400
 
-        params = {'name': name}
+        from agent_profile import AgentGatewayClient, AgentConfig
+        client = AgentGatewayClient()
 
-        # 可选参数
+        # 生成或使用自定义 ID
+        agent_id = data.get('id') or name.lower().replace(' ', '_').replace('-', '_')
+
+        # 检查 ID 是否已存在
+        if client.agent_exists(agent_id):
+            return jsonify({'success': False, 'error': f'Agent ID "{agent_id}" 已存在'}), 400
+
+        # 创建配置
+        new_config = AgentConfig(
+            id=agent_id,
+            name=name,
+            workspace=data.get('workspace') or f"~/.openclaw/workspace-{agent_id}",
+            is_default=False
+        )
+
+        # 设置 model
         if data.get('model'):
-            params['model'] = data['model']
-        if data.get('workspace'):
-            params['workspace'] = data['workspace']
+            if isinstance(data['model'], dict):
+                new_config.model = data['model']
+            else:
+                new_config.model = {'primary': data['model']}
 
-        # 调用 WebSocket 创建 Agent
-        result = sync_call('agents.create', params)
-        agent = result.get('agent', {})
+        # 添加 Agent 配置
+        client.add_agent(new_config)
 
-        log_operation_direct('create_agent', 'agent', agent.get('id'), json.dumps({'name': name}))
+        # 创建初始文件
+        init_files = ['SOUL.md', 'IDENTITY.md', 'USER.md']
+        for filename in init_files:
+            client.set_agent_file(agent_id, filename, f"# {filename.replace('.md', '')}\n\n")
+
+        log_operation_direct('create_agent', 'agent', agent_id, json.dumps({'name': name}))
 
         return jsonify({
             'success': True,
-            'data': agent,
-            'message': f'Agent {agent.get("id")} 创建成功'
+            'data': {'id': agent_id, 'name': name},
+            'message': f'Agent {agent_id} 创建成功'
         })
-    except GatewayError as e:
-        return jsonify({'success': False, 'error': f'Gateway 错误: {e.message}'}), 400
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -3137,6 +3159,66 @@ def get_agent_memory_content(agent_id, date):
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==================== Chat API ====================
+
+@app.route('/api/chat/config', methods=['GET'])
+@require_permission('sessions', 'read')
+def get_chat_config():
+    """返回 Gateway WebSocket 配置"""
+    return jsonify({
+        'success': True,
+        'data': {
+            'gatewayUrl': settings.GATEWAY_URL,
+            'gatewayToken': settings.GATEWAY_AUTH_TOKEN
+        }
+    })
+
+
+@app.route('/api/chat/artifact/download', methods=['POST'])
+@require_permission('sessions', 'read')
+def download_artifact():
+    """下载会话生成的文件"""
+    data = request.get_json() or {}
+    file_path = data.get('path', '')
+
+    if not file_path:
+        return jsonify({'success': False, 'error': '文件路径不能为空'}), 400
+
+    # 安全检查：防止路径遍历攻击
+    # 只允许访问 workspace 目录下的文件
+    workspace_dir = settings.OPENCLAW_WORKSPACE_DIR
+    if not workspace_dir:
+        return jsonify({'success': False, 'error': 'Workspace 目录未配置'}), 500
+
+    # 规范化路径
+    import os
+    file_path = os.path.normpath(file_path)
+    workspace_dir = os.path.normpath(workspace_dir)
+
+    # 检查文件路径是否在 workspace 目录下
+    if not file_path.startswith(workspace_dir):
+        return jsonify({'success': False, 'error': '文件路径不在允许范围内'}), 403
+
+    # 检查文件是否存在
+    if not os.path.isfile(file_path):
+        return jsonify({'success': False, 'error': '文件不存在'}), 404
+
+    try:
+        # 读取文件内容
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'content': content,
+                'name': os.path.basename(file_path)
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'读取文件失败: {str(e)}'}), 500
 
 
 # ==================== 搜索 API ====================

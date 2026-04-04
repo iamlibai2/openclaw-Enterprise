@@ -975,4 +975,15 @@ export const imageGeneratorApi = {
   }
 }
 
+// ==================== Chat API ====================
+export const chatApi = {
+  getConfig() {
+    return api.get<{ success: boolean; data: { gatewayUrl: string; gatewayToken: string } }>('/chat/config')
+  },
+
+  downloadArtifact(params: { path: string }) {
+    return api.post<{ success: boolean; data: { content: string; name: string } }>('/chat/artifact/download', params)
+  }
+}
+
 export default api

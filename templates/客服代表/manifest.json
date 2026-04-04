@@ -1,0 +1,17 @@
+{
+  "name": "客服代表",
+  "id": "customer_service",
+  "version": "1.0.0",
+  "description": "热情耐心的客服代表，擅长问答、工单处理、客户服务",
+  "components": {
+    "soul": true,
+    "identity": true,
+    "user": true,
+    "skills": false,
+    "tools": true,
+    "model": true,
+    "memory": false
+  },
+  "recommendedSkills": [],
+  "recommendedTools": ["messaging"]
+}
