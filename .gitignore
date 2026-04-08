@@ -32,3 +32,22 @@ Thumbs.db
 *.pem
 *.key
 credentials.json
+
+# 测试覆盖率
+.coverage
+*.coverage
+coverage.json
+frontend/coverage/
+
+# 测试结果
+frontend/test-results/
+e2e/test-results/
+e2e/report/
+e2e/.auth/
+
+# 运行时目录
+backend/events/
+backend/tasks/
+
+# 备份文件
+*.bak
