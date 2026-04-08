@@ -1192,3 +1192,162 @@ def _read_template_file(template_dir: Path, filename: str) -> Optional[str]:
         with open(file_path, 'r', encoding='utf-8') as f:
             return f.read()
     return None
+
+
+# ============================================================
+# Agent 扩展档案 API（拟人化属性）
+# ============================================================
+
+from database import db
+
+
+@bp.route('/<agent_id>/extended-profile', methods=['GET'])
+@auth_required
+def get_extended_profile(agent_id):
+    """获取 Agent 扩展档案（拟人化属性）"""
+    try:
+        profile = db.fetch_one(
+            "SELECT * FROM agent_profiles WHERE agent_id = ?",
+            (agent_id,)
+        )
+
+        if not profile:
+            # 返回默认空数据
+            return jsonify({
+                'success': True,
+                'data': {
+                    'agent_id': agent_id,
+                    'gender': None,
+                    'birthday': None,
+                    'age_display': None,
+                    'personality': None,
+                    'hobbies': [],
+                    'voice_style': None,
+                    'custom_fields': {},
+                    'total_conversations': 0,
+                    'total_tokens': 0,
+                    'admin_notes': None,
+                    'tags': []
+                }
+            })
+
+        # 解析 JSON 字段
+        result = dict(profile)
+        if result.get('hobbies'):
+            try:
+                result['hobbies'] = json.loads(result['hobbies'])
+            except:
+                result['hobbies'] = []
+        else:
+            result['hobbies'] = []
+
+        if result.get('custom_fields'):
+            try:
+                result['custom_fields'] = json.loads(result['custom_fields'])
+            except:
+                result['custom_fields'] = {}
+        else:
+            result['custom_fields'] = {}
+
+        if result.get('tags'):
+            try:
+                result['tags'] = json.loads(result['tags'])
+            except:
+                result['tags'] = []
+        else:
+            result['tags'] = []
+
+        return jsonify({'success': True, 'data': result})
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@bp.route('/<agent_id>/extended-profile', methods=['PUT'])
+@auth_required
+def update_extended_profile(agent_id):
+    """更新 Agent 扩展档案"""
+    data = request.get_json() or {}
+
+    try:
+        # 检查是否已存在
+        existing = db.fetch_one(
+            "SELECT agent_id FROM agent_profiles WHERE agent_id = ?",
+            (agent_id,)
+        )
+
+        # 准备数据
+        update_data = {
+            'gender': data.get('gender'),
+            'birthday': data.get('birthday'),
+            'age_display': data.get('age_display'),
+            'personality': data.get('personality'),
+            'hobbies': json.dumps(data.get('hobbies', []), ensure_ascii=False) if data.get('hobbies') else None,
+            'voice_style': data.get('voice_style'),
+            'custom_fields': json.dumps(data.get('custom_fields', {}), ensure_ascii=False) if data.get('custom_fields') else None,
+            'admin_notes': data.get('admin_notes'),
+            'tags': json.dumps(data.get('tags', []), ensure_ascii=False) if data.get('tags') else None,
+            'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+
+        if existing:
+            # 更新
+            db.update(
+                'agent_profiles',
+                update_data,
+                'agent_id = ?',
+                (agent_id,)
+            )
+        else:
+            # 插入
+            update_data['agent_id'] = agent_id
+            update_data['total_conversations'] = 0
+            update_data['total_tokens'] = 0
+            db.insert('agent_profiles', update_data)
+
+        return jsonify({'success': True, 'message': '保存成功'})
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@bp.route('/<agent_id>/stats', methods=['POST'])
+@auth_required
+def update_agent_stats(agent_id):
+    """更新 Agent 统计数据（内部调用）"""
+    data = request.get_json() or {}
+
+    try:
+        # 检查是否已存在
+        existing = db.fetch_one(
+            "SELECT agent_id, total_conversations, total_tokens FROM agent_profiles WHERE agent_id = ?",
+            (agent_id,)
+        )
+
+        if existing:
+            # 累加更新
+            new_conversations = existing['total_conversations'] + data.get('conversation_add', 0)
+            new_tokens = existing['total_tokens'] + data.get('token_add', 0)
+
+            db.update(
+                'agent_profiles',
+                {
+                    'total_conversations': new_conversations,
+                    'total_tokens': new_tokens,
+                    'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                },
+                'agent_id = ?',
+                (agent_id,)
+            )
+        else:
+            # 创建新记录
+            db.insert('agent_profiles', {
+                'agent_id': agent_id,
+                'total_conversations': data.get('conversation_add', 0),
+                'total_tokens': data.get('token_add', 0)
+            })
+
+        return jsonify({'success': True})
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500

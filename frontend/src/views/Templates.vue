@@ -134,9 +134,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus'
 import { Plus, View, Edit, Delete, Document } from '@element-plus/icons-vue'
 import { configFileApi, type TemplateParams } from '../api'
+import { createFormRules, sanitizeData } from '../utils/rules'
 import { useUserStore } from '../stores/user'
 
 interface Template {
@@ -172,15 +173,13 @@ const formData = ref<TemplateParams>({
   content: ''
 })
 
-const rules: FormRules = {
-  id: [
-    { required: true, message: '请输入模板ID', trigger: 'blur' },
-    { pattern: /^[a-z0-9-]+$/, message: '只能包含小写字母、数字和 -', trigger: 'blur' }
-  ],
-  name: [{ required: true, message: '请输入模板名称', trigger: 'blur' }],
-  fileType: [{ required: true, message: '请选择文件类型', trigger: 'change' }],
-  content: [{ required: true, message: '请输入模板内容', trigger: 'blur' }]
-}
+// 使用统一校验规则
+const rules = createFormRules({
+  id: 'templateId',
+  name: 'templateName',
+  fileType: 'templateFileType',
+  content: 'templateContent'
+})
 
 // 查看对话框
 const viewDialogVisible = ref(false)
@@ -263,11 +262,14 @@ async function submitForm() {
 
   submitting.value = true
   try {
+    // 清理输入数据
+    const cleanedData = sanitizeData(formData.value)
+
     if (isEdit.value) {
       const res = await configFileApi.updateTemplate(editingId.value, {
-        name: formData.value.name,
-        description: formData.value.description,
-        content: formData.value.content
+        name: cleanedData.name,
+        description: cleanedData.description,
+        content: cleanedData.content
       })
       if (res.data.success) {
         ElMessage.success('更新成功')
@@ -277,7 +279,7 @@ async function submitForm() {
         ElMessage.error(res.data.error)
       }
     } else {
-      const res = await configFileApi.createTemplate(formData.value)
+      const res = await configFileApi.createTemplate(cleanedData)
       if (res.data.success) {
         ElMessage.success('创建成功')
         dialogVisible.value = false

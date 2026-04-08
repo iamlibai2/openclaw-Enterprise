@@ -153,15 +153,22 @@ class ModelManager:
             if 'providers' not in config['models']:
                 config['models']['providers'] = {}
 
-            provider_id = data['provider']
-            model_name = data['model_name']
+            # 清理输入，去除首尾空格
+            provider_id = data['provider'].strip() if data.get('provider') else ''
+            model_name = data['model_name'].strip() if data.get('model_name') else ''
+            model_display_name = data.get('name', model_name).strip()
+            api_base = data.get('api_base', '').strip()
+            api_key = data.get('api_key', '').strip() if data.get('api_key') else ''
+
+            if not provider_id or not model_name:
+                raise ValueError("提供商和模型名称不能为空")
 
             # 确保提供商配置存在
             if provider_id not in config['models']['providers']:
                 template = PROVIDER_TEMPLATES.get(provider_id, {})
                 config['models']['providers'][provider_id] = {
-                    'baseUrl': data.get('api_base') or template.get('baseUrl', ''),
-                    'apiKey': data.get('api_key', ''),
+                    'baseUrl': api_base or template.get('baseUrl', ''),
+                    'apiKey': api_key,
                     'api': 'openai-completions',
                     'models': []
                 }
@@ -169,8 +176,8 @@ class ModelManager:
             provider_config = config['models']['providers'][provider_id]
 
             # 如果有新的 API Key，更新
-            if data.get('api_key'):
-                provider_config['apiKey'] = data['api_key']
+            if api_key:
+                provider_config['apiKey'] = api_key
 
             # 添加模型
             params = data.get('parameters', {})
@@ -180,7 +187,7 @@ class ModelManager:
 
             new_model = {
                 'id': model_name,
-                'name': data.get('name', model_name),
+                'name': model_display_name,
                 'api': 'openai-completions',
                 'reasoning': False,
                 'input': ['text'],
@@ -201,7 +208,7 @@ class ModelManager:
                 'baseHash': base_hash
             })
 
-            return self.get_model(model_name) or {'id': model_name, 'name': data.get('name', model_name)}
+            return self.get_model(model_name) or {'id': model_name, 'name': model_display_name}
 
         except Exception as e:
             raise Exception(f"创建模型失败: {e}")
@@ -214,6 +221,9 @@ class ModelManager:
             base_hash = result.get('hash')  # 获取配置版本 hash
             providers = config.get('models', {}).get('providers', {})
 
+            # 清理输入
+            model_id = model_id.strip() if model_id else ''
+
             for provider_id, provider_config in providers.items():
                 if not isinstance(provider_config, dict):
                     continue
@@ -222,7 +232,7 @@ class ModelManager:
                     if isinstance(model, dict) and model.get('id') == model_id:
                         # 更新模型属性
                         if 'name' in data:
-                            model['name'] = data['name']
+                            model['name'] = data['name'].strip() if data['name'] else model_id
                         if 'parameters' in data:
                             params = data['parameters']
                             # 兼容 camelCase 和 snake_case
@@ -233,7 +243,7 @@ class ModelManager:
 
                         # 更新 API Key（在提供商级别）
                         if data.get('api_key'):
-                            provider_config['apiKey'] = data['api_key']
+                            provider_config['apiKey'] = data['api_key'].strip()
 
                         # 保存配置 - 必须传递 baseHash
                         import json5

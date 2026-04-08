@@ -219,6 +219,29 @@ class GatewayClient:
                     future.set_exception(GatewayError("CONNECTION_CLOSED", "连接已关闭"))
             self.pending.clear()
 
+    async def _receive_messages(self):
+        """
+        接收消息的异步生成器
+
+        用于外部监听所有消息
+        """
+        try:
+            async for message in self.ws:
+                try:
+                    data = json.loads(message)
+                    # 先交给内部处理
+                    await self._handle_message(data)
+                    # 再 yield 给外部
+                    yield data
+                except json.JSONDecodeError:
+                    pass
+        except websockets.ConnectionClosed:
+            self.connected = False
+            for future in self.pending.values():
+                if not future.done():
+                    future.set_exception(GatewayError("CONNECTION_CLOSED", "连接已关闭"))
+            self.pending.clear()
+
     async def _handle_message(self, data: Dict):
         """处理接收到的消息"""
         msg_type = data.get("type")

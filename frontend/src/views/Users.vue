@@ -104,6 +104,7 @@ import { ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { userApi, roleApi, type User, type Role } from '../api'
 import { useUserStore } from '../stores/user'
+import { createFormRules, validateField } from '../utils/rules'
 
 const userStore = useUserStore()
 const users = ref<User[]>([])
@@ -128,18 +129,40 @@ const formData = ref({
   new_password: ''
 })
 
+// 使用统一校验规则
 const rules: FormRules = {
-  username: [
-    { required: true, message: '请输入用户名', trigger: 'blur' },
-    { min: 3, max: 50, message: '用户名3-50位', trigger: 'blur' }
-  ],
-  password: [
-    { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, message: '密码至少6位', trigger: 'blur' }
-  ],
+  ...createFormRules({
+    username: 'username',
+    display_name: 'displayName',
+    email: 'email'
+  }),
+  password: [{
+    validator: (rule, value, callback) => {
+      if (!value) {
+        callback(new Error('请输入密码'))
+      } else if (value.length < 6) {
+        callback(new Error('密码至少6个字符'))
+      } else {
+        callback()
+      }
+    },
+    trigger: 'blur'
+  }],
   role_id: [
     { required: true, message: '请选择角色', trigger: 'change' }
-  ]
+  ],
+  new_password: [{
+    validator: (rule, value, callback) => {
+      if (!value) {
+        callback() // 不修改则留空
+      } else if (value.length < 6) {
+        callback(new Error('密码至少6个字符'))
+      } else {
+        callback()
+      }
+    },
+    trigger: 'blur'
+  }]
 }
 
 async function loadData() {

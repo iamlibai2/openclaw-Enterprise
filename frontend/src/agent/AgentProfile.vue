@@ -276,6 +276,52 @@
           </div>
         </div>
       </div>
+
+      <!-- 个人资料卡片（拟人化属性） -->
+      <div class="profile-card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="card-icon">👤</span>
+            个人资料
+          </div>
+          <el-button text type="primary" @click="showExtendedEditor = true">
+            <el-icon><Edit /></el-icon>
+            编辑
+          </el-button>
+        </div>
+        <div class="card-content">
+          <div class="extended-info">
+            <div class="info-row">
+              <span class="info-label">性别</span>
+              <span class="info-value">{{ profile.extended?.gender || '未设置' }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">生日</span>
+              <span class="info-value">{{ profile.extended?.birthday || '未设置' }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">年龄</span>
+              <span class="info-value">{{ profile.extended?.age_display || '未设置' }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">性格</span>
+              <span class="info-value">{{ profile.extended?.personality || '未设置' }}</span>
+            </div>
+            <div v-if="profile.extended?.hobbies?.length" class="info-row">
+              <span class="info-label">爱好</span>
+              <div class="hobby-tags">
+                <el-tag v-for="hobby in profile.extended.hobbies" :key="hobby" size="small" class="hobby-tag">
+                  {{ hobby }}
+                </el-tag>
+              </div>
+            </div>
+            <div class="info-row">
+              <span class="info-label">说话风格</span>
+              <span class="info-value">{{ profile.extended?.voice_style || '未设置' }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 身份编辑器 -->
@@ -329,16 +375,24 @@
       :agent-id="agentId"
       @saved="onToolsSaved"
     />
+
+    <!-- 扩展档案编辑器 -->
+    <ExtendedEditor
+      v-model="showExtendedEditor"
+      :agent-id="agentId"
+      :profile="profile?.extended"
+      @saved="onExtendedSaved"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, Edit, Download, CopyDocument, View, Setting } from '@element-plus/icons-vue'
 import type { AgentProfile } from './types'
-import { getAgentProfile } from './api'
+import { getAgentProfile, getExtendedProfile } from './api'
 
 // 子组件
 import IdentityEditor from './components/IdentityEditor.vue'
@@ -346,10 +400,12 @@ import SoulEditor from './components/SoulEditor.vue'
 import UserEditor from './components/UserEditor.vue'
 import MemoryManager from './components/MemoryManager.vue'
 import CloneDialog from './components/CloneDialog.vue'
+import ExtendedEditor from './components/ExtendedEditor.vue'
 import ExportDialog from './components/ExportDialog.vue'
 import ToolsEditor from './components/ToolsEditor.vue'
 
 const route = useRoute()
+const router = useRouter()
 
 // 状态
 const loading = ref(true)
@@ -364,6 +420,7 @@ const showMemoryManager = ref(false)
 const showCloneDialog = ref(false)
 const showExportDialog = ref(false)
 const showToolsEditor = ref(false)
+const showExtendedEditor = ref(false)
 
 // 当前 Agent ID
 const agentId = computed(() => route.params.id as string || route.query.id as string)
@@ -397,6 +454,12 @@ async function loadProfile() {
     const data = await getAgentProfile(agentId.value)
     if (data) {
       profile.value = data
+
+      // 加载扩展档案
+      const extended = await getExtendedProfile(agentId.value)
+      if (extended) {
+        profile.value.extended = extended
+      }
     } else {
       error.value = 'Agent 不存在'
     }
@@ -451,6 +514,10 @@ function onMemorySaved() {
 }
 
 function onToolsSaved() {
+  loadProfile()
+}
+
+function onExtendedSaved() {
   loadProfile()
 }
 

@@ -191,3 +191,36 @@ export async function createFromTemplate(
     return { success: false, message: e.message }
   }
 }
+
+// 获取 Agent 扩展档案（拟人化属性）
+export async function getExtendedProfile(agentId: string): Promise<ExtendedProfile | null> {
+  try {
+    const res = await api.get<{ success: boolean; data: ExtendedProfile }>(
+      `/agents/${agentId}/extended-profile`
+    )
+    return res.data.data || null
+  } catch {
+    return null
+  }
+}
+
+// 更新 Agent 扩展档案
+export async function updateExtendedProfile(
+  agentId: string,
+  data: Partial<ExtendedProfile>
+): Promise<{ success: boolean; message?: string }> {
+  try {
+    const res = await api.put<{ success: boolean; error?: string }>(
+      `/agents/${agentId}/extended-profile`,
+      data
+    )
+    return {
+      success: res.data.success,
+      message: res.data.error
+    }
+  } catch (e: any) {
+    return { success: false, message: e.message }
+  }
+}
+
+import type { ExtendedProfile } from './types'

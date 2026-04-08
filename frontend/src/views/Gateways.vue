@@ -62,19 +62,24 @@
             {{ row.last_connected_at || '从未连接' }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="280">
+        <el-table-column label="操作" width="320">
           <template #default="{ row }">
-            <el-button size="small" @click="testConnection(row)" :loading="row.testing">
-              测试连接
-            </el-button>
-            <el-button size="small" @click="switchGateway(row)" v-if="!row.is_default">
-              切换
-            </el-button>
-            <el-button size="small" @click="showEditDialog(row)">编辑</el-button>
-            <el-button size="small" type="danger" @click="deleteGateway(row)"
-                       :disabled="gateways.length <= 1">
-              删除
-            </el-button>
+            <div class="action-buttons">
+              <span class="switch-slot">
+                <el-button size="small" @click="switchGateway(row)" v-if="currentGateway?.id !== row.id">
+                  切换
+                </el-button>
+                <span v-else class="current-tag">当前使用</span>
+              </span>
+              <el-button size="small" @click="testConnection(row)" :loading="row.testing">
+                测试
+              </el-button>
+              <el-button size="small" @click="showEditDialog(row)">编辑</el-button>
+              <el-button size="small" type="danger" @click="deleteGateway(row)"
+                         :disabled="gateways.length <= 1">
+                删除
+              </el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -108,6 +113,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
+import { validateFields } from '../utils/rules'
 
 interface Gateway {
   id: number
@@ -137,6 +143,21 @@ const formData = ref({
   auth_token: '',
   is_default: false
 })
+
+// 表单校验 - 使用统一规则
+const validateForm = () => {
+  const result = validateFields(
+    { gatewayName: formData.value.name, gatewayUrl: formData.value.url },
+    ['gatewayName', 'gatewayUrl']
+  )
+
+  if (!result.valid) {
+    const firstError = Object.values(result.errors)[0]
+    ElMessage.warning(firstError)
+    return false
+  }
+  return true
+}
 
 const getStatusType = (status: string) => {
   switch (status) {
@@ -211,8 +232,8 @@ const showEditDialog = (gateway: Gateway) => {
 }
 
 const saveGateway = async () => {
-  if (!formData.value.name || !formData.value.url) {
-    ElMessage.error('请填写名称和地址')
+  // 表单校验
+  if (!validateForm()) {
     return
   }
 
@@ -410,5 +431,32 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.action-buttons {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.switch-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 24px;
+}
+
+.current-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 24px;
+  font-size: 12px;
+  color: #67c23a;
+  font-weight: 500;
+  background: #f0f9eb;
+  border-radius: 4px;
 }
 </style>

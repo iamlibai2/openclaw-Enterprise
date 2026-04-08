@@ -104,7 +104,7 @@
         <el-collapse-item title="绑定配置" name="bindings">
           <pre class="config-json">{{ bindingsConfig }}</pre>
         </el-collapse-item>
-        <el-collapse-item title="模型配置" name="models">
+        <el-collapse-item title="系统用模型配置" name="models">
           <pre class="config-json">{{ modelsConfig }}</pre>
         </el-collapse-item>
       </el-collapse>

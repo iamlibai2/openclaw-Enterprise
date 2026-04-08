@@ -150,6 +150,7 @@ import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { InfoFilled } from '@element-plus/icons-vue'
 import { authApi } from '../api'
 import { useUserStore } from '../stores/user'
+import { createFormRules } from '../utils/rules'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -161,14 +162,11 @@ const form = reactive({
   password: ''
 })
 
-const rules: FormRules = {
-  username: [
-    { required: true, message: '请输入用户名', trigger: 'blur' }
-  ],
-  password: [
-    { required: true, message: '请输入密码', trigger: 'blur' }
-  ]
-}
+// 使用统一校验规则
+const rules: FormRules = createFormRules({
+  username: 'username',
+  password: 'password'
+})
 
 async function handleLogin() {
   if (!formRef.value) return

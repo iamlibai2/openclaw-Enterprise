@@ -140,4 +140,20 @@ def get_sync_client(gateway_id: Optional[int] = None) -> SyncGatewayClient:
 
 
 def set_current_gateway(gateway_id: int):
+    """切换当前使用的 Gateway"""
     settings.current_gateway_id = gateway_id
+
+    # 重置全局客户端，强制下次调用时重新连接
+    from gateway_client import _global_client
+    import asyncio
+
+    global_client = _global_client
+    if global_client and global_client.connected:
+        try:
+            asyncio.run(global_client.close())
+        except Exception:
+            pass
+
+    # 清除全局客户端引用
+    import gateway_client
+    gateway_client._global_client = None

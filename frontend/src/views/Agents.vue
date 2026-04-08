@@ -87,8 +87,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { FormInstance, FormRules } from 'element-plus'
+import type { FormInstance } from 'element-plus'
 import { agentApi, modelApi, type AgentConfig, type Model } from '../api'
+import { createFormRules, sanitizeData } from '../utils/rules'
 
 // 数据
 const agents = ref<AgentConfig[]>([])
@@ -109,19 +110,12 @@ const formData = ref({
   workspace: ''
 })
 
-// 表单验证规则
-const rules: FormRules = {
-  id: [
-    { required: true, message: '请输入 Agent ID', trigger: 'blur' },
-    { pattern: /^[a-z0-9-]+$/, message: 'ID 只能包含小写字母、数字和 -', trigger: 'blur' }
-  ],
-  name: [
-    { required: true, message: '请输入名称', trigger: 'blur' }
-  ],
-  modelId: [
-    { required: true, message: '请选择模型', trigger: 'change' }
-  ]
-}
+// 使用统一校验规则
+const rules = createFormRules({
+  id: 'agentIdLower',
+  name: 'agentName',
+  modelId: 'modelSelect'
+})
 
 // 加载 Agent 列表
 async function loadAgents() {
@@ -173,19 +167,27 @@ async function submitForm() {
 
   submitting.value = true
   try {
-    const data: any = {
+    // 清理输入数据
+    const cleanedData = sanitizeData({
+      id: formData.value.id,
       name: formData.value.name,
-      model: { primary: formData.value.modelId }
+      modelId: formData.value.modelId,
+      workspace: formData.value.workspace
+    })
+
+    const data: any = {
+      name: cleanedData.name,
+      model: { primary: cleanedData.modelId }
     }
 
     if (!isEdit.value) {
-      data.id = formData.value.id
-      if (formData.value.workspace) {
-        data.workspace = formData.value.workspace
+      data.id = cleanedData.id
+      if (cleanedData.workspace) {
+        data.workspace = cleanedData.workspace
       }
     } else {
-      if (formData.value.workspace) {
-        data.workspace = formData.value.workspace
+      if (cleanedData.workspace) {
+        data.workspace = cleanedData.workspace
       }
     }
 

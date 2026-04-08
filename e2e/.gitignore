@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Test results
+test-results/
+report/
+
+# Screenshots
+screenshots/
+
+# Authentication state
+.auth/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

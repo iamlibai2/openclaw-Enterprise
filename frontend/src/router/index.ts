@@ -3,6 +3,7 @@ import { useUserStore } from '../stores/user'
 import Agents from '../views/Agents.vue'
 import { ChatPage } from '../chat'
 import { AgentProfilePage, AgentGalleryPage } from '../agent'
+import { TasksPage } from '../tasks'
 
 const routes = [
   {
@@ -125,6 +126,13 @@ const routes = [
     component: () => import('../views/Tasks.vue'),
     meta: { requiresAuth: true }
   },
+  // 定时任务
+  {
+    path: '/scheduled-tasks',
+    name: 'ScheduledTasks',
+    component: TasksPage,
+    meta: { requiresAuth: true, permission: 'tasks:read' }
+  },
   // 监控与状态
   {
     path: '/status',
@@ -138,10 +146,25 @@ const routes = [
     component: () => import('../views/Sessions.vue'),
     meta: { requiresAuth: true, permission: 'sessions:read' }
   },
+  // OpenClaw 运行日志
   {
-    path: '/logs',
-    name: 'Logs',
-    component: () => import('../views/Logs.vue'),
+    path: '/openclaw-logs',
+    name: 'OpenclawLogs',
+    component: () => import('../views/OpenclawLogs.vue'),
+    meta: { requiresAuth: true, permission: 'logs:read' }
+  },
+  // Admin UI 运行日志
+  {
+    path: '/admin-logs',
+    name: 'AdminLogs',
+    component: () => import('../views/AdminLogs.vue'),
+    meta: { requiresAuth: true, permission: 'logs:read' }
+  },
+  // 操作日志
+  {
+    path: '/operation-logs',
+    name: 'OperationLogs',
+    component: () => import('../views/OperationLogs.vue'),
     meta: { requiresAuth: true, permission: 'logs:read' }
   },
   // 系统设置

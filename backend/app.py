@@ -2,7 +2,7 @@
 OpenClaw Admin Backend - Flask API
 企业级用户管理和权限系统
 """
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g, Response
 from flask_cors import CORS
 from config_manager import ConfigManager
 from database import db
@@ -21,6 +21,11 @@ from model_manager import model_manager, PROVIDER_TEMPLATES
 from channel_manager import channel_manager, CHANNEL_TYPES
 from config_sync import config_sync
 from agent_profile import bp as agent_profile_bp
+from security import (
+    add_security_headers, get_cors_config,
+    rate_limit, sanitize_input, sanitize_dict
+)
+from events import gateway_listener, event_router, sse_manager, EventType
 import subprocess
 import json
 from datetime import datetime, timedelta
@@ -30,10 +35,17 @@ import yaml
 import json5
 
 app = Flask(__name__)
-CORS(app)  # 允许跨域请求
+
+# CORS 配置（使用安全配置）
+CORS(app, **get_cors_config())
 
 # 注册蓝图
 app.register_blueprint(agent_profile_bp)
+
+# 添加安全响应头
+@app.after_request
+def after_request(response):
+    return add_security_headers(response)
 
 # 初始化日志系统
 setup_logging(app)
@@ -44,23 +56,36 @@ logger = get_logger('app')
 
 
 def _get_agents_via_ws():
-    """通过 WebSocket 获取 Agent 列表（合并配置中的 workspace 信息）"""
+    """通过 WebSocket 获取 Agent 列表（合并配置中的完整信息）"""
     # 从 agents.list 获取基本信息
     result = sync_call('agents.list')
     agents = result.get('agents', [])
 
-    # 从 config.get 获取 workspace 信息
+    # 从 config.get 获取完整配置
     config = _get_config_via_ws()
     agents_config = config.get('agents', {}).get('list', [])
 
-    # 创建 workspace 映射
-    workspace_map = {a.get('id'): a.get('workspace') for a in agents_config}
+    # 创建配置映射
+    config_map = {a.get('id'): a for a in agents_config}
 
-    # 合并 workspace 信息
+    # 合并完整配置信息
     for agent in agents:
         agent_id = agent.get('id')
-        if agent_id in workspace_map:
-            agent['workspace'] = workspace_map[agent_id]
+        if agent_id in config_map:
+            agent_config = config_map[agent_id]
+            # 合并各字段（config 中的配置更完整）
+            if 'workspace' in agent_config:
+                agent['workspace'] = agent_config['workspace']
+            if 'model' in agent_config:
+                agent['model'] = agent_config['model']
+            if 'skills' in agent_config:
+                agent['skills'] = agent_config['skills']
+            if 'tools' in agent_config:
+                agent['tools'] = agent_config['tools']
+            if 'subagents' in agent_config:
+                agent['subagents'] = agent_config['subagents']
+            if 'default' in agent_config:
+                agent['default'] = agent_config['default']
 
     return agents
 
@@ -153,11 +178,12 @@ def health_check():
 
 
 @app.route('/api/auth/login', methods=['POST'])
+@rate_limit(max_requests=5, window_seconds=60)
 def login():
     """用户登录"""
     try:
         data = request.get_json()
-        username = data.get('username', '').strip()
+        username = sanitize_input(data.get('username', '')).strip()
         password = data.get('password', '')
 
         if not username or not password:
@@ -340,7 +366,7 @@ def create_user():
         data = request.get_json()
         username = data.get('username', '').strip()
         password = data.get('password', '')
-        email = data.get('email', '').strip()
+        email = data.get('email', '').strip() or None  # 空字符串转为 NULL
         display_name = data.get('display_name', '').strip()
         role_id = data.get('role_id', 3)  # 默认 viewer
 
@@ -355,16 +381,25 @@ def create_user():
         if existing:
             return jsonify({'success': False, 'error': '用户名已存在'}), 400
 
+        # 检查邮箱是否已存在（如果提供了邮箱）
+        if email:
+            existing_email = db.fetch_one("SELECT id FROM users WHERE email = ?", (email,))
+            if existing_email:
+                return jsonify({'success': False, 'error': '邮箱已被使用'}), 400
+
         # 创建用户
         password_hash = hash_password(password)
-        user_id = db.insert('users', {
+        user_data = {
             'username': username,
             'password_hash': password_hash,
-            'email': email,
             'display_name': display_name or username,
             'role_id': role_id,
             'is_active': 1
-        })
+        }
+        if email:
+            user_data['email'] = email
+
+        user_id = db.insert('users', user_data)
 
         log_operation_direct('create_user', 'user', str(user_id), json.dumps({'username': username, 'role_id': role_id}))
 
@@ -590,30 +625,38 @@ def create_agent():
 @app.route('/api/agents/<agent_id>', methods=['PUT'])
 @require_permission('agents', 'write')
 def update_agent(agent_id):
-    """更新 Agent - 通过 WebSocket"""
+    """更新 Agent - 通过修改配置"""
     try:
         data = request.get_json()
 
-        # 构建 WebSocket 更新参数
-        params = {'agentId': agent_id}
+        # 获取当前配置
+        config = _get_config_via_ws()
+        agents_list = config.get('agents', {}).get('list', [])
 
-        # 支持的更新字段
-        if 'name' in data:
-            params['name'] = data['name']
-        if 'model' in data:
-            params['model'] = data['model']
-        if 'workspace' in data:
-            params['workspace'] = data['workspace']
+        # 找到并更新指定 Agent
+        found = False
+        for agent in agents_list:
+            if agent.get('id') == agent_id:
+                found = True
+                # 更新字段
+                if 'name' in data:
+                    agent['name'] = data['name']
+                if 'model' in data:
+                    agent['model'] = data['model']
+                if 'workspace' in data:
+                    agent['workspace'] = data['workspace']
+                break
 
-        # 调用 WebSocket 更新 Agent
-        result = sync_call('agents.update', params)
-        agent = result.get('agent', {})
+        if not found:
+            return jsonify({'success': False, 'error': 'Agent 不存在'}), 404
+
+        # 应用配置
+        _save_config_via_ws(config)
 
         log_operation_direct('update_agent', 'agent', agent_id)
 
         return jsonify({
             'success': True,
-            'data': agent,
             'message': f'Agent {agent_id} 更新成功'
         })
     except GatewayError as e:
@@ -3817,7 +3860,7 @@ def create_department():
             'sort_order': sort_order
         })
 
-        log_operation_direct('create_department', 'department', str(dept_id), {'name': name})
+        log_operation_direct('create_department', 'department', str(dept_id), json.dumps({'name': name}))
         return jsonify({'success': True, 'data': {'id': dept_id, 'name': name}})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3987,7 +4030,7 @@ def create_employee():
             'agent_id': agent_id
         })
 
-        log_operation_direct('create_employee', 'employee', str(emp_id), {'name': name})
+        log_operation_direct('create_employee', 'employee', str(emp_id), json.dumps({'name': name}))
         return jsonify({'success': True, 'data': {'id': emp_id, 'name': name}})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -4054,7 +4097,7 @@ def delete_employee(emp_id):
         emp = db.fetch_one("SELECT name FROM employees WHERE id = ?", (emp_id,))
         db.delete('employees', 'id = ?', (emp_id,))
 
-        log_operation_direct('delete_employee', 'employee', str(emp_id), {'name': emp['name'] if emp else ''})
+        log_operation_direct('delete_employee', 'employee', str(emp_id), json.dumps({'name': emp['name'] if emp else ''}))
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -4085,7 +4128,7 @@ def bind_agent_to_employee(emp_id):
             return jsonify({'success': False, 'error': '该 Agent 已被其他员工绑定'}), 400
 
         db.update('employees', {'agent_id': agent_id, 'updated_at': datetime.now().isoformat()}, 'id = ?', (emp_id,))
-        log_operation_direct('bind_agent', 'employee', str(emp_id), {'agent_id': agent_id})
+        log_operation_direct('bind_agent', 'employee', str(emp_id), json.dumps({'agent_id': agent_id}))
         return jsonify({'success': True, 'message': f'已绑定 Agent: {agent.get("name")}'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -4156,7 +4199,7 @@ def create_gateway():
             'status': 'unknown'
         })
 
-        log_operation_direct('create_gateway', 'gateway', str(gw_id), {'name': name, 'url': url})
+        log_operation_direct('create_gateway', 'gateway', str(gw_id), json.dumps({'name': name, 'url': url}))
         return jsonify({'success': True, 'data': {'id': gw_id, 'name': name}, 'message': 'Gateway 创建成功'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -5006,6 +5049,34 @@ def create_model_provider():
             if not data.get(field):
                 return jsonify({'success': False, 'error': f'{field} 是必填字段'}), 400
 
+        # 提供商名称格式校验
+        import re
+        name_pattern = re.compile(r'^[a-zA-Z][a-zA-Z0-9_-]*$')
+        if not name_pattern.match(data['name']):
+            return jsonify({'success': False, 'error': '提供商名称只能包含字母、数字、下划线、连字符，且必须以字母开头'}), 400
+
+        # Base URL 格式校验
+        from urllib.parse import urlparse
+        parsed_url = urlparse(data['base_url'])
+        if parsed_url.scheme not in ['http', 'https']:
+            return jsonify({'success': False, 'error': 'Base URL 必须以 http:// 或 https:// 开头'}), 400
+        if not parsed_url.netloc:
+            return jsonify({'success': False, 'error': 'Base URL 格式不正确'}), 400
+
+        # API Key 环境变量名格式校验
+        env_pattern = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+        if not env_pattern.match(data['api_key_env']):
+            return jsonify({'success': False, 'error': '环境变量名只能包含字母、数字、下划线，且不能以数字开头'}), 400
+
+        # JSON 配置校验
+        config_json = data.get('config_json', '')
+        if config_json and config_json.strip():
+            try:
+                import json
+                json.loads(config_json)
+            except json.JSONDecodeError:
+                return jsonify({'success': False, 'error': '模型配置 JSON 格式不正确'}), 400
+
         # 检查名称是否已存在
         existing = db.fetch_one(
             "SELECT id FROM model_providers WHERE name = ?",
@@ -5022,7 +5093,7 @@ def create_model_provider():
             'api_key_env': data['api_key_env'],
             'api_type': data.get('api_type', 'image-generation'),
             'enabled': 1 if data.get('enabled', True) else 0,
-            'config_json': data.get('config_json', '')
+            'config_json': config_json
         })
 
         log_operation_direct('创建模型提供商', 'model_provider', str(provider_id))
@@ -5048,20 +5119,41 @@ def update_model_provider(provider_id):
         if not existing:
             return jsonify({'success': False, 'error': '提供商不存在'}), 404
 
+        import re
+        from urllib.parse import urlparse
+        import json as json_module
+
         # 更新数据
         update_data = {}
         if 'display_name' in data:
             update_data['display_name'] = data['display_name']
         if 'base_url' in data:
+            # Base URL 格式校验
+            parsed_url = urlparse(data['base_url'])
+            if parsed_url.scheme not in ['http', 'https']:
+                return jsonify({'success': False, 'error': 'Base URL 必须以 http:// 或 https:// 开头'}), 400
+            if not parsed_url.netloc:
+                return jsonify({'success': False, 'error': 'Base URL 格式不正确'}), 400
             update_data['base_url'] = data['base_url']
         if 'api_key_env' in data:
+            # API Key 环境变量名格式校验
+            env_pattern = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+            if not env_pattern.match(data['api_key_env']):
+                return jsonify({'success': False, 'error': '环境变量名只能包含字母、数字、下划线，且不能以数字开头'}), 400
             update_data['api_key_env'] = data['api_key_env']
         if 'api_type' in data:
             update_data['api_type'] = data['api_type']
         if 'enabled' in data:
             update_data['enabled'] = 1 if data['enabled'] else 0
         if 'config_json' in data:
-            update_data['config_json'] = data['config_json']
+            # JSON 配置校验
+            config_json = data['config_json']
+            if config_json and config_json.strip():
+                try:
+                    json_module.loads(config_json)
+                except json_module.JSONDecodeError:
+                    return jsonify({'success': False, 'error': '模型配置 JSON 格式不正确'}), 400
+            update_data['config_json'] = config_json
 
         if update_data:
             db.update('model_providers', update_data, 'id = ?', (provider_id,))
@@ -5126,11 +5218,643 @@ def delete_model_provider(provider_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ==================== 定时任务 API ====================
+
+from tasks import task_scheduler, TASK_TYPES, TASK_TYPE_LABELS, INTERVAL_OPTIONS
+
+@app.route('/api/scheduled-tasks', methods=['GET'])
+@require_auth
+def get_scheduled_tasks():
+    """获取定时任务列表"""
+    try:
+        tasks = db.fetch_all(
+            "SELECT * FROM scheduled_tasks ORDER BY created_at DESC"
+        )
+
+        # 补充执行统计
+        for task in tasks:
+            # 获取最近一次执行
+            last_exec = db.fetch_one(
+                "SELECT * FROM task_executions WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+                (task['id'],)
+            )
+            task['last_execution'] = last_exec
+
+            # 获取执行次数
+            count = db.fetch_one(
+                "SELECT COUNT(*) as count FROM task_executions WHERE task_id = ?",
+                (task['id'],)
+            )
+            task['execution_count'] = count['count'] if count else 0
+
+        return jsonify({
+            'success': True,
+            'data': tasks,
+            'task_types': TASK_TYPES,
+            'interval_options': INTERVAL_OPTIONS
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/scheduled-tasks', methods=['POST'])
+@require_permission('tasks', 'write')
+def create_scheduled_task():
+    """创建定时任务"""
+    try:
+        data = request.get_json()
+
+        name = data.get('name', '').strip()
+        agent_id = data.get('agent_id', '').strip()
+        task_type = data.get('task_type', '').strip()
+        task_params = data.get('task_params', {})
+        interval_minutes = data.get('interval_minutes', 60)
+
+        if not name:
+            return jsonify({'success': False, 'error': '请输入任务名称'}), 400
+        if not agent_id:
+            return jsonify({'success': False, 'error': '请选择 Agent'}), 400
+        if not task_type:
+            return jsonify({'success': False, 'error': '请选择任务类型'}), 400
+
+        # 创建任务
+        task_id = db.insert('scheduled_tasks', {
+            'name': name,
+            'agent_id': agent_id,
+            'task_type': task_type,
+            'task_params': json.dumps(task_params, ensure_ascii=False) if task_params else None,
+            'interval_minutes': interval_minutes,
+            'enabled': 1
+        })
+
+        # 添加到调度器
+        task_scheduler.add_task(task_id)
+
+        log_operation_direct(f'创建定时任务: {name}', 'scheduled_task', str(task_id))
+
+        return jsonify({'success': True, 'data': {'id': task_id}})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/scheduled-tasks/<int:task_id>', methods=['PUT'])
+@require_permission('tasks', 'write')
+def update_scheduled_task(task_id):
+    """更新定时任务"""
+    try:
+        data = request.get_json()
+
+        # 检查任务是否存在
+        existing = db.fetch_one(
+            "SELECT id FROM scheduled_tasks WHERE id = ?",
+            (task_id,)
+        )
+        if not existing:
+            return jsonify({'success': False, 'error': '任务不存在'}), 404
+
+        # 更新字段
+        update_data = {}
+        if 'name' in data:
+            update_data['name'] = data['name'].strip()
+        if 'agent_id' in data:
+            update_data['agent_id'] = data['agent_id'].strip()
+        if 'task_type' in data:
+            update_data['task_type'] = data['task_type'].strip()
+        if 'task_params' in data:
+            update_data['task_params'] = json.dumps(data['task_params'], ensure_ascii=False)
+        if 'interval_minutes' in data:
+            update_data['interval_minutes'] = data['interval_minutes']
+        if 'enabled' in data:
+            update_data['enabled'] = 1 if data['enabled'] else 0
+
+        if update_data:
+            update_data['updated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            db.update('scheduled_tasks', update_data, 'id = ?', (task_id,))
+
+            # 更新调度器
+            task_scheduler.update_task(task_id)
+
+        log_operation_direct(f'更新定时任务: {task_id}', 'scheduled_task', str(task_id))
+
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/scheduled-tasks/<int:task_id>', methods=['DELETE'])
+@require_permission('tasks', 'write')
+def delete_scheduled_task(task_id):
+    """删除定时任务"""
+    try:
+        # 检查任务是否存在
+        existing = db.fetch_one(
+            "SELECT name FROM scheduled_tasks WHERE id = ?",
+            (task_id,)
+        )
+        if not existing:
+            return jsonify({'success': False, 'error': '任务不存在'}), 404
+
+        # 从调度器移除
+        task_scheduler.remove_task(task_id)
+
+        # 删除执行记录
+        db.execute("DELETE FROM task_executions WHERE task_id = ?", (task_id,))
+
+        # 删除任务
+        db.execute("DELETE FROM scheduled_tasks WHERE id = ?", (task_id,))
+
+        log_operation_direct(f'删除定时任务: {existing["name"]}', 'scheduled_task', str(task_id))
+
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/scheduled-tasks/<int:task_id>/run', methods=['POST'])
+@require_permission('tasks', 'write')
+def run_scheduled_task_now(task_id):
+    """立即执行任务"""
+    try:
+        result = task_scheduler.run_task_now(task_id)
+
+        if result.get('success'):
+            log_operation_direct(f'手动执行定时任务: {task_id}', 'scheduled_task', str(task_id))
+            return jsonify({'success': True, 'data': result})
+        else:
+            return jsonify({'success': False, 'error': result.get('error', '执行失败')}), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/scheduled-tasks/<int:task_id>/executions', methods=['GET'])
+@require_auth
+def get_task_executions(task_id):
+    """获取任务执行记录"""
+    try:
+        limit = request.args.get('limit', 50, type=int)
+
+        executions = db.fetch_all(
+            "SELECT * FROM task_executions WHERE task_id = ? ORDER BY created_at DESC LIMIT ?",
+            (task_id, limit)
+        )
+
+        return jsonify({'success': True, 'data': executions})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/task-executions/recent', methods=['GET'])
+@require_auth
+def get_recent_executions():
+    """获取最近执行记录（用于通知）"""
+    try:
+        user = get_current_user()
+
+        # 只有管理员能看到通知
+        if user.get('role') != 'admin':
+            return jsonify({'success': True, 'data': [], 'unread_count': 0})
+
+        limit = request.args.get('limit', 20, type=int)
+
+        # 获取最近的执行记录
+        executions = db.fetch_all("""
+            SELECT e.*, t.name as task_name, t.task_type
+            FROM task_executions e
+            JOIN scheduled_tasks t ON e.task_id = t.id
+            ORDER BY e.created_at DESC
+            LIMIT ?
+        """, (limit,))
+
+        # 获取未读数量
+        unread = db.fetch_one(
+            "SELECT COUNT(*) as count FROM task_executions WHERE is_read = 0"
+        )
+        unread_count = unread['count'] if unread else 0
+
+        return jsonify({
+            'success': True,
+            'data': executions,
+            'unread_count': unread_count
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/task-executions/<int:execution_id>/read', methods=['POST'])
+@require_auth
+def mark_execution_read(execution_id):
+    """标记执行记录为已读"""
+    try:
+        db.update('task_executions', {'is_read': 1}, 'id = ?', (execution_id,))
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/task-executions/read-all', methods=['POST'])
+@require_auth
+def mark_all_executions_read():
+    """标记所有执行记录为已读"""
+    try:
+        db.execute("UPDATE task_executions SET is_read = 1")
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ==================== OpenClaw 日志 API ====================
+
+@app.route('/api/openclaw-logs', methods=['GET'])
+@require_permission('logs', 'read')
+def get_openclaw_logs():
+    """获取 OpenClaw 运行日志"""
+    try:
+        cursor = request.args.get('cursor', type=int)
+        limit = request.args.get('limit', 500, type=int)
+        max_bytes = request.args.get('maxBytes', 250000, type=int)
+        level = request.args.get('level', '')  # 可选过滤级别
+
+        # 调用 Gateway logs.tail 方法
+        params = {'limit': min(limit, 5000), 'maxBytes': min(max_bytes, 1000000)}
+        if cursor is not None:
+            params['cursor'] = cursor
+
+        result = sync_call('logs.tail', params)
+
+        lines = result.get('lines', [])
+
+        # 可选：按级别过滤
+        if level:
+            import json
+            filtered = []
+            for line in lines:
+                try:
+                    obj = json.loads(line)
+                    if obj.get('level', '').lower() == level.lower():
+                        filtered.append(line)
+                except:
+                    pass
+            lines = filtered
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'file': result.get('file'),
+                'cursor': result.get('cursor'),
+                'size': result.get('size'),
+                'lines': lines,
+                'truncated': result.get('truncated', False),
+                'reset': result.get('reset', False)
+            }
+        })
+    except GatewayError as e:
+        return jsonify({'success': False, 'error': f'Gateway 错误: {e.message}'}), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/openclaw-logs/file', methods=['GET'])
+@require_permission('logs', 'read')
+def get_openclaw_log_file():
+    """获取日志文件路径信息"""
+    try:
+        # 从 Gateway 获取日志配置
+        result = sync_call('logs.tail', {'limit': 1})
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'file': result.get('file'),
+                'size': result.get('size')
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin-logs', methods=['GET'])
+@require_permission('logs', 'read')
+def get_admin_logs():
+    """获取 Admin UI 运行日志"""
+    try:
+        log_type = request.args.get('type', 'app')  # app 或 error
+        limit = request.args.get('limit', 500, type=int)
+        level = request.args.get('level', '')  # 可选过滤级别
+
+        # 日志目录
+        log_dir = Path(__file__).parent / 'logs'
+        log_file = log_dir / f'{log_type}.log'
+
+        if not log_file.exists():
+            return jsonify({
+                'success': True,
+                'data': {
+                    'lines': [],
+                    'file': str(log_file),
+                    'exists': False
+                }
+            })
+
+        # 读取日志文件（从末尾开始读取指定行数）
+        lines = []
+        with open(log_file, 'r', encoding='utf-8') as f:
+            # 读取所有行，取最后 limit 行
+            all_lines = f.readlines()
+            lines = all_lines[-min(limit, len(all_lines)):]
+
+        # 可选：按级别过滤
+        if level:
+            filtered = []
+            for line in lines:
+                try:
+                    obj = json.loads(line.strip())
+                    log_level = obj.get('level', '').upper()
+                    # 支持级别层级：ERROR >= WARN >= INFO >= DEBUG
+                    level_order = {'DEBUG': 0, 'INFO': 1, 'WARNING': 2, 'WARN': 2, 'ERROR': 3, 'CRITICAL': 4}
+                    if level_order.get(log_level, 0) >= level_order.get(level.upper(), 0):
+                        filtered.append(line.strip())
+                except:
+                    # 非 JSON 行也保留
+                    filtered.append(line.strip())
+            lines = filtered
+
+        # 获取文件大小
+        file_size = log_file.stat().st_size
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'file': str(log_file),
+                'size': file_size,
+                'lines': [line.strip() for line in lines],
+                'exists': True
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/admin-logs/files', methods=['GET'])
+@require_permission('logs', 'read')
+def get_admin_log_files():
+    """获取 Admin UI 日志文件列表"""
+    try:
+        log_dir = Path(__file__).parent / 'logs'
+        files = []
+
+        if log_dir.exists():
+            for f in log_dir.iterdir():
+                if f.is_file() and f.suffix == '.log':
+                    stat = f.stat()
+                    files.append({
+                        'name': f.name,
+                        'size': stat.st_size,
+                        'modified': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                    })
+
+        # 按修改时间排序
+        files.sort(key=lambda x: x['modified'], reverse=True)
+
+        return jsonify({
+            'success': True,
+            'data': files
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============ SSE 事件推送 ============
+
+@app.route('/api/events/stream')
+def sse_stream():
+    """
+    SSE 事件流端点
+
+    前端通过此端点建立 SSE 连接，接收实时事件
+    支持通过 query 参数或 header 传递 token
+    """
+    # 从 query 参数或 header 获取 token
+    token = request.args.get('token')
+
+    if not token:
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header[7:]
+
+    if not token:
+        return jsonify({'success': False, 'error': '未授权'}), 401
+
+    # 验证 token
+    try:
+        payload = verify_access_token(token)
+        user_id = payload.get('user_id')
+    except Exception as e:
+        return jsonify({'success': False, 'error': 'Token 无效或已过期'}), 401
+
+    # 获取用户信息和角色
+    user = db.fetch_one("SELECT * FROM users WHERE id = ?", (user_id,))
+    if not user:
+        return jsonify({'success': False, 'error': '用户不存在'}), 401
+
+    # 通过 role_id 查询角色名称
+    roles = set()
+    role_id = user.get('role_id')
+    if role_id:
+        role = db.fetch_one("SELECT name FROM roles WHERE id = ?", (role_id,))
+        if role and role.get('name') == 'admin':
+            roles.add('admin')
+
+    app.logger.info(f"[SSE] User connected: user_id={user_id}, role_id={role_id}, roles_set={roles}")
+
+    def generate():
+        for data in sse_manager.stream(user_id, roles):
+            yield data
+
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'  # 禁用 Nginx 缓冲
+        }
+    )
+
+
+@app.route('/api/events/status')
+@require_auth
+def sse_status():
+    """获取 SSE 连接状态"""
+    return jsonify({
+        'success': True,
+        'data': {
+            'gateway': gateway_listener.get_status(),
+            'sse': sse_manager.get_stats()
+        }
+    })
+
+
+# ============ 系统配置 API ============
+
+@app.route('/api/settings', methods=['GET'])
+@require_auth
+def get_settings():
+    """获取系统配置"""
+    try:
+        settings_list = db.fetch_all(
+            "SELECT key, value, value_type, description, category FROM system_settings ORDER BY category, key"
+        )
+
+        # 转换为字典
+        settings_dict = {}
+        for s in settings_list:
+            value = s['value']
+            # 类型转换
+            if s['value_type'] == 'number':
+                value = int(value) if '.' not in value else float(value)
+            elif s['value_type'] == 'boolean':
+                value = value.lower() == 'true'
+            elif s['value_type'] == 'json':
+                try:
+                    value = json.loads(value)
+                except:
+                    pass
+
+            settings_dict[s['key']] = {
+                'value': value,
+                'description': s['description'],
+                'category': s['category']
+            }
+
+        return jsonify({
+            'success': True,
+            'data': settings_dict
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/settings/<key>', methods=['GET'])
+@require_auth
+def get_setting(key):
+    """获取单个配置"""
+    try:
+        setting = db.fetch_one(
+            "SELECT * FROM system_settings WHERE key = ?",
+            (key,)
+        )
+
+        if not setting:
+            return jsonify({'success': False, 'error': '配置项不存在'}), 404
+
+        value = setting['value']
+        if setting['value_type'] == 'number':
+            value = int(value) if '.' not in value else float(value)
+        elif setting['value_type'] == 'boolean':
+            value = value.lower() == 'true'
+        elif setting['value_type'] == 'json':
+            try:
+                value = json.loads(value)
+            except:
+                pass
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'key': key,
+                'value': value,
+                'description': setting['description'],
+                'category': setting['category']
+            }
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/settings/<key>', methods=['PUT'])
+@require_permission('config', 'write')
+def update_setting(key):
+    """更新配置"""
+    try:
+        data = request.get_json()
+        value = data.get('value')
+
+        if value is None:
+            return jsonify({'success': False, 'error': '缺少 value 参数'}), 400
+
+        # 获取配置项信息
+        setting = db.fetch_one(
+            "SELECT * FROM system_settings WHERE key = ?",
+            (key,)
+        )
+
+        if not setting:
+            return jsonify({'success': False, 'error': '配置项不存在'}), 404
+
+        # 类型转换和验证
+        value_type = setting['value_type']
+        if value_type == 'number':
+            value = str(value)
+        elif value_type == 'boolean':
+            value = 'true' if value else 'false'
+        elif value_type == 'json':
+            value = json.dumps(value, ensure_ascii=False)
+        else:
+            value = str(value)
+
+        # 更新
+        user = get_current_user()
+        db.update('system_settings', {
+            'value': value,
+            'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'updated_by': user['id']
+        }, 'key = ?', (key,))
+
+        return jsonify({
+            'success': True,
+            'message': '配置已更新'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     print("=" * 50)
     print("OpenClaw Admin Backend (企业版)")
     print("=" * 50)
     print(f"数据库路径: {db.db_path}")
+
+    # 初始化 system_settings 表
+    db.execute('''
+        CREATE TABLE IF NOT EXISTS system_settings (
+            key VARCHAR(50) PRIMARY KEY,
+            value TEXT NOT NULL,
+            value_type VARCHAR(20) DEFAULT 'string',
+            description VARCHAR(200),
+            category VARCHAR(50),
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_by INTEGER
+        )
+    ''')
+
+    # 插入默认配置
+    default_settings = [
+        ('sse_enabled', 'true', 'boolean', '启用 SSE 事件推送', 'events'),
+        ('sse_heartbeat_interval', '30', 'number', 'SSE 心跳间隔(秒)', 'events'),
+        ('task_notification_enabled', 'true', 'boolean', '启用任务完成通知', 'notification'),
+        ('task_result_push_enabled', 'true', 'boolean', '启用任务结果实时推送', 'task'),
+    ]
+
+    for key, value, value_type, description, category in default_settings:
+        existing = db.fetch_one("SELECT key FROM system_settings WHERE key = ?", (key,))
+        if not existing:
+            db.insert('system_settings', {
+                'key': key,
+                'value': value,
+                'value_type': value_type,
+                'description': description,
+                'category': category
+            })
 
     # 显示实际使用的 Gateway URL（优先从数据库获取）
     try:
@@ -5149,4 +5873,25 @@ if __name__ == '__main__':
     print("默认管理员账户: admin / admin123")
     print("=" * 50)
 
-    app.run(host='127.0.0.1', port=5001, debug=True)
+    # 启动任务调度器
+    task_scheduler.start()
+
+    # 启动 Gateway 监听器
+    print("正在启动 Gateway 监听器...")
+
+    # 设置事件回调
+    async def on_gateway_event(event_type: str, payload: dict):
+        await event_router.route(event_type, payload)
+
+    gateway_listener.set_event_callback(on_gateway_event)
+    gateway_listener.start()
+
+    print("Gateway 监听器已启动")
+
+    try:
+        # 使用 use_reloader=False 避免 debug 模式下重复启动
+        app.run(host='127.0.0.1', port=5001, debug=True, use_reloader=False)
+    finally:
+        # 关闭监听器
+        gateway_listener.stop()
+        print("Gateway 监听器已停止")

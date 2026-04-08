@@ -245,9 +245,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
-import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus'
 import { Plus, View, Edit, Delete, Document, Folder, Search, ArrowDown } from '@element-plus/icons-vue'
 import { skillApi } from '../api'
+import { createFormRules, sanitizeData } from '../utils/rules'
 import { useUserStore } from '../stores/user'
 import { marked } from 'marked'
 
@@ -362,14 +363,12 @@ const formData = ref({
   agentId: ''
 })
 
-const rules: FormRules = {
-  name: [
-    { required: true, message: '请输入 Skill 名称', trigger: 'blur' },
-    { pattern: /^[a-z0-9_-]+$/, message: '只能包含小写字母、数字、下划线和横线', trigger: 'blur' }
-  ],
-  location: [{ required: true, message: '请选择存储位置', trigger: 'change' }],
-  content: [{ required: true, message: '请输入内容', trigger: 'blur' }]
-}
+// 使用统一校验规则
+const rules = createFormRules({
+  name: 'skillName',
+  location: 'skillLocation',
+  content: 'skillContent'
+})
 
 function getSkillIcon(skill: Skill): string {
   const icons: Record<string, string> = {
@@ -525,8 +524,11 @@ async function submitForm() {
 
   submitting.value = true
   try {
+    // 清理输入数据
+    const cleanedData = sanitizeData(formData.value)
+
     if (isEdit.value) {
-      const res = await skillApi.update(editingSlug.value, formData.value.content)
+      const res = await skillApi.update(editingSlug.value, cleanedData.content)
       if (res.data.success) {
         ElMessage.success('更新成功')
         editDialogVisible.value = false
@@ -535,7 +537,7 @@ async function submitForm() {
         ElMessage.error(res.data.error)
       }
     } else {
-      const res = await skillApi.create(formData.value)
+      const res = await skillApi.create(cleanedData)
       if (res.data.success) {
         ElMessage.success('创建成功')
         editDialogVisible.value = false

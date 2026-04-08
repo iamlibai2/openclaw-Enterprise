@@ -24,6 +24,33 @@ export interface AgentProfile {
 
   // 统计
   stats: AgentStats
+
+  // 扩展档案（拟人化属性）
+  extended?: ExtendedProfile
+}
+
+// 扩展档案（拟人化属性）
+export interface ExtendedProfile {
+  agent_id: string
+
+  // 拟人化属性
+  gender?: string           // 性别
+  birthday?: string         // 生日 MM-DD
+  age_display?: string      // 显示年龄
+  personality?: string      // 性格描述
+  hobbies?: string[]        // 爱好
+  voice_style?: string      // 说话风格
+
+  // 扩展属性
+  custom_fields?: Record<string, any>
+
+  // 统计
+  total_conversations?: number
+  total_tokens?: number
+
+  // 备注
+  admin_notes?: string
+  tags?: string[]
 }
 
 // 灵魂配置

@@ -252,6 +252,7 @@ import { Plus, ChatDotRound } from '@element-plus/icons-vue'
 import { channelApi } from '../api'
 import type { Channel, ChannelAccount } from '../api'
 import ChannelWizard from '../components/ChannelWizard.vue'
+import { createFormRules, sanitizeData } from '../utils/rules'
 
 const channels = ref<Channel[]>([])
 const loading = ref(false)
@@ -284,9 +285,10 @@ const accountForm = reactive({
   groupAllowFromStr: ''
 })
 
-const accountFormRules = {
-  accountId: [{ required: true, message: '请输入账号标识', trigger: 'blur' }]
-}
+// 使用统一校验规则
+const accountFormRules = createFormRules({
+  accountId: 'accountId'
+})
 
 // 删除弹窗
 const deleteDialogVisible = ref(false)
@@ -396,10 +398,16 @@ async function submitAccountForm() {
 
   submitting.value = true
   try {
+    // 清理输入数据
+    const cleanedData = sanitizeData({
+      accountId: accountForm.accountId,
+      groupAllowFromStr: accountForm.groupAllowFromStr
+    })
+
     // 处理群允许列表
     const config = { ...accountForm.config }
-    if (accountForm.groupAllowFromStr) {
-      config.groupAllowFrom = accountForm.groupAllowFromStr.split(',').map(s => s.trim()).filter(Boolean)
+    if (cleanedData.groupAllowFromStr) {
+      config.groupAllowFrom = cleanedData.groupAllowFromStr.split(',').map(s => s.trim()).filter(Boolean)
     }
 
     let res
@@ -412,7 +420,7 @@ async function submitAccountForm() {
     } else {
       res = await channelApi.createAccount(
         currentChannel.value.name,
-        accountForm.accountId,
+        cleanedData.accountId,
         config
       )
     }

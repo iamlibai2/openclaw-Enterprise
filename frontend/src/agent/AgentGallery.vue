@@ -142,7 +142,10 @@ function onCreated(agentId: string) {
 
 <style scoped>
 .agent-gallery-page {
+  margin: -20px;
   padding: 20px;
+  min-height: calc(100vh - 56px);
+  background: #f5f7fa;
 }
 
 .page-header {
@@ -152,17 +155,28 @@ function onCreated(agentId: string) {
   align-items: flex-start;
 }
 
+.header-left {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
 .header-left h2 {
   font-size: 22px;
   font-weight: 600;
   color: #1a1a1a;
-  margin: 0 0 8px 0;
+  margin: 0;
+  line-height: 1.3;
+  text-align: left;
 }
 
 .header-left .page-desc {
   font-size: 14px;
   color: #999;
   margin: 0;
+  line-height: 1.5;
+  text-align: left;
 }
 
 .header-right {
@@ -177,7 +191,7 @@ function onCreated(agentId: string) {
 /* Agent 卡片网格 */
 .agent-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(4, 1fr);
   gap: 20px;
 }
 
@@ -270,6 +284,18 @@ function onCreated(agentId: string) {
 }
 
 /* 响应式 */
+@media (max-width: 1200px) {
+  .agent-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 1000px) {
+  .agent-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
 @media (max-width: 768px) {
   .agent-grid {
     grid-template-columns: 1fr;

@@ -98,6 +98,7 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 import { Plus, Edit, Delete, OfficeBuilding, Folder } from '@element-plus/icons-vue'
 import { departmentApi, employeeApi, type Department, type Employee } from '../api'
 import { useUserStore } from '../stores/user'
+import { createFormRules } from '../utils/rules'
 
 const userStore = useUserStore()
 const loading = ref(false)
@@ -120,9 +121,10 @@ const formData = ref({
   sort_order: 0
 })
 
-const rules: FormRules = {
-  name: [{ required: true, message: '请输入部门名称', trigger: 'blur' }]
-}
+// 使用统一校验规则
+const rules: FormRules = createFormRules({
+  name: 'departmentName'
+})
 
 // 部门选项（用于上级部门选择，排除自己）
 const departmentOptions = computed(() => {

@@ -165,6 +165,7 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
+import { validateFields } from '../utils/rules'
 
 const providers = ref<any[]>([])
 const dialogVisible = ref(false)
@@ -179,6 +180,43 @@ const form = ref({
   config_json: '',
   enabled: true
 })
+
+// 表单校验 - 使用统一规则
+const validateForm = () => {
+  const result = validateFields(
+    {
+      providerName: form.value.name,
+      displayName: form.value.display_name,
+      baseUrl: form.value.base_url,
+      apiKeyEnv: form.value.api_key_env
+    },
+    ['providerName', 'baseUrl', 'apiKeyEnv']
+  )
+
+  if (!result.valid) {
+    const firstError = Object.values(result.errors)[0]
+    ElMessage.warning(firstError)
+    return false
+  }
+
+  // 显示名称校验
+  if (!form.value.display_name) {
+    ElMessage.warning('请输入显示名称')
+    return false
+  }
+
+  // JSON 配置校验
+  if (form.value.config_json && form.value.config_json.trim()) {
+    try {
+      JSON.parse(form.value.config_json)
+    } catch {
+      ElMessage.warning('模型配置 JSON 格式不正确')
+      return false
+    }
+  }
+
+  return true
+}
 
 async function loadProviders() {
   try {
@@ -220,8 +258,8 @@ function editProvider(provider: any) {
 }
 
 async function saveProvider() {
-  if (!form.value.name || !form.value.display_name || !form.value.base_url || !form.value.api_key_env) {
-    ElMessage.warning('请填写必填项')
+  // 表单校验
+  if (!validateForm()) {
     return
   }
 

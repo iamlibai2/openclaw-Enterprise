@@ -6,12 +6,26 @@
           <h1>模型管理</h1>
           <p>配置和管理 AI 模型，支持 API Key 加密存储</p>
         </div>
-        <el-button type="primary" @click="showCreateDialog" v-if="permissions.can_edit">
+        <el-button type="primary" @click="showCreateDialog" v-if="permissions.can_edit" :disabled="gatewayRestarting">
           <el-icon><Plus /></el-icon>
           添加模型
         </el-button>
       </div>
     </el-card>
+
+    <!-- Gateway 重启提示 -->
+    <el-alert
+      v-if="gatewayRestarting"
+      title="Gateway 正在重启生效，正在等待恢复..."
+      type="warning"
+      :closable="false"
+      show-icon
+      class="restart-alert"
+    >
+      <template #default>
+        <span>配置已保存，系统正在自动等待 Gateway 恢复并刷新数据...</span>
+      </template>
+    </el-alert>
 
     <!-- 提供商筛选 -->
     <el-card class="filter-card">
@@ -32,7 +46,7 @@
 
     <!-- 模型列表 -->
     <el-card class="content-card">
-      <el-table :data="filteredModels" stripe v-loading="loading">
+      <el-table :data="filteredModels" stripe v-loading="loading || gatewayRestarting">
         <el-table-column prop="name" label="名称" width="180">
           <template #default="{ row }">
             <div class="model-name">
@@ -47,9 +61,10 @@
           </template>
         </el-table-column>
         <el-table-column prop="model_name" label="模型" width="150" />
-        <el-table-column prop="api_key_masked" label="API Key" width="150">
+        <el-table-column prop="api_key_masked" label="API Key" width="80">
           <template #default="{ row }">
-            <span class="api-key-masked">{{ row.api_key_masked || '未配置' }}</span>
+            <span class="api-key-hidden" v-if="row.has_api_key">已隐藏</span>
+            <span class="api-key-none" v-else>未配置</span>
           </template>
         </el-table-column>
         <el-table-column prop="api_base" label="API 地址" min-width="200">
@@ -66,29 +81,31 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
             <el-button
               link
               type="primary"
-              @click="testModel(row)"
-              :loading="row.testing"
-              v-if="permissions.can_read"
-            >
-              测试
-            </el-button>
-            <el-button
-              link
-              type="primary"
               @click="showEditDialog(row)"
+              :disabled="gatewayRestarting"
               v-if="permissions.can_edit"
             >
               编辑
             </el-button>
             <el-button
               link
+              type="success"
+              @click="showCloneDialog(row)"
+              :disabled="gatewayRestarting"
+              v-if="permissions.can_edit"
+            >
+              克隆
+            </el-button>
+            <el-button
+              link
               type="danger"
               @click="deleteModel(row)"
+              :disabled="gatewayRestarting"
               v-if="permissions.can_delete"
             >
               删除
@@ -101,10 +118,14 @@
     <!-- 创建/编辑对话框 -->
     <el-dialog
       v-model="dialogVisible"
-      :title="isEdit ? '编辑模型' : '添加模型'"
+      :title="isEdit ? '编辑模型' : isClone ? '克隆模型' : '添加模型'"
       width="600px"
       destroy-on-close
     >
+      <div class="clone-hint" v-if="isClone">
+        <el-icon><InfoFilled /></el-icon>
+        <span>基于现有模型创建新配置，可修改提供商和模型名称</span>
+      </div>
       <el-form
         ref="formRef"
         :model="formData"
@@ -160,8 +181,8 @@
             placeholder="输入 API Key"
             show-password
           />
-          <div class="form-tip" v-if="isEdit && currentModel?.api_key_masked">
-            当前：{{ currentModel.api_key_masked }}（留空保持不变）
+          <div class="form-tip" v-if="isEdit && currentModel?.has_api_key">
+            当前已配置（留空保持不变）
           </div>
         </el-form-item>
 
@@ -218,43 +239,22 @@
         </el-button>
       </template>
     </el-dialog>
-
-    <!-- 测试结果对话框 -->
-    <el-dialog
-      v-model="testDialogVisible"
-      title="模型连接测试"
-      width="400px"
-    >
-      <div class="test-result" v-if="testResult">
-        <div class="test-status" :class="testResult.connected ? 'success' : 'failed'">
-          <el-icon v-if="testResult.connected"><SuccessFilled /></el-icon>
-          <el-icon v-else><CircleCloseFilled /></el-icon>
-          <span>{{ testResult.connected ? '连接成功' : '连接失败' }}</span>
-        </div>
-        <div class="test-details" v-if="testResult.connected">
-          <div class="detail-item">
-            <span class="label">响应时间:</span>
-            <span class="value">{{ testResult.response_time }}ms</span>
-          </div>
-          <div class="detail-item">
-            <span class="label">模型:</span>
-            <span class="value">{{ testResult.model }}</span>
-          </div>
-        </div>
-        <div class="test-error" v-else>
-          <span class="label">错误信息:</span>
-          <span class="value">{{ testResult.error }}</span>
-        </div>
-      </div>
-    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
-import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, SuccessFilled, CircleCloseFilled } from '@element-plus/icons-vue'
-import { modelApi, type ModelProvider, type ModelConfig, type ModelTestResult } from '../api'
+import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus'
+import { Plus, InfoFilled } from '@element-plus/icons-vue'
+import { modelApi, type ModelProvider, type ModelConfig } from '../api'
+import { createFormRules, sanitizeData } from '../utils/rules'
+
+// 使用统一校验规则
+const formRules = createFormRules({
+  name: 'modelDisplayName',
+  provider: 'providerName',
+  model_name: 'modelName'
+})
 
 // 状态
 const loading = ref(false)
@@ -263,13 +263,13 @@ const models = ref<ModelConfig[]>([])
 const providers = ref<ModelProvider[]>([])
 const selectedProvider = ref('')
 const permissions = ref({ can_read: true, can_edit: true, can_delete: true })
+const gatewayRestarting = ref(false) // Gateway 重启等待状态
 
 // 对话框
 const dialogVisible = ref(false)
-const testDialogVisible = ref(false)
 const isEdit = ref(false)
+const isClone = ref(false) // 区分克隆场景
 const currentModel = ref<ModelConfig | null>(null)
-const testResult = ref<ModelTestResult | null>(null)
 
 // 表单
 const formRef = ref<FormInstance>()
@@ -287,12 +287,6 @@ const formData = reactive({
   },
   enabled: true
 })
-
-const formRules: FormRules = {
-  name: [{ required: true, message: '请输入显示名称', trigger: 'blur' }],
-  provider: [{ required: true, message: '请选择提供商', trigger: 'change' }],
-  model_name: [{ required: true, message: '请选择模型', trigger: 'change' }]
-}
 
 // 计算属性
 const currentProviderTemplate = computed(() => {
@@ -362,11 +356,32 @@ const resetForm = () => {
   formData.parameters = { temperature: 0.7, max_tokens: 4096, context_window: 16000 }
   formData.enabled = true
   currentModel.value = null
+  isClone.value = false
 }
 
 const showCreateDialog = () => {
   resetForm()
   isEdit.value = false
+  isClone.value = false
+  dialogVisible.value = true
+}
+
+const showCloneDialog = (model: ModelConfig) => {
+  resetForm()
+  isEdit.value = false // 克隆是创建新模型，不是编辑
+  isClone.value = true
+  currentModel.value = null
+
+  // 复制所有配置，但允许修改关键字段
+  formData.name = model.name + ' (副本)'
+  formData.provider = model.provider
+  formData.model_name = model.model_name
+  formData.api_key = '' // API Key 需要重新输入（敏感信息不复制）
+  formData.api_base = model.api_base
+  formData.model_type = model.model_type
+  formData.parameters = { ...model.parameters }
+  formData.enabled = true // 新模型默认启用
+
   dialogVisible.value = true
 }
 
@@ -397,6 +412,43 @@ const onProviderChange = (providerId: string) => {
   }
 }
 
+// Gateway 重启等待
+const waitForGatewayRestart = async () => {
+  gatewayRestarting.value = true
+  ElMessage({
+    message: '配置已保存，Gateway 正在重启生效...',
+    type: 'success',
+    duration: 3000
+  })
+
+  // 轮询等待 Gateway 恢复（最多等待 30 秒）
+  const maxAttempts = 15
+  let attempts = 0
+
+  while (attempts < maxAttempts) {
+    try {
+      await new Promise(resolve => setTimeout(resolve, 2000)) // 等待 2 秒
+      attempts++
+
+      // 尝试加载模型列表
+      const res = await modelApi.list()
+      if (res.data.success) {
+        models.value = res.data.data
+        gatewayRestarting.value = false
+        ElMessage.success('Gateway 已恢复，数据已刷新')
+        return
+      }
+    } catch (e) {
+      // Gateway 还未恢复，继续等待
+      console.log(`等待 Gateway 恢复... (${attempts}/${maxAttempts})`)
+    }
+  }
+
+  // 超时
+  gatewayRestarting.value = false
+  ElMessage.warning('Gateway 恢复超时，请手动刷新页面')
+}
+
 const submitForm = async () => {
   if (!formRef.value) return
 
@@ -405,40 +457,41 @@ const submitForm = async () => {
 
     submitting.value = true
     try {
+      // 统一清理输入
+      const cleanData = sanitizeData({
+        name: formData.name,
+        provider: formData.provider,
+        model_name: formData.model_name,
+        api_key: formData.api_key,
+        api_base: formData.api_base,
+        model_type: formData.model_type,
+        parameters: formData.parameters,
+        enabled: formData.enabled
+      })
+
       if (isEdit.value && currentModel.value) {
         // 更新
         const updateData: any = {
-          name: formData.name,
-          api_base: formData.api_base,
-          parameters: formData.parameters,
-          enabled: formData.enabled
+          name: cleanData.name,
+          api_base: cleanData.api_base,
+          parameters: cleanData.parameters,
+          enabled: cleanData.enabled
         }
-        if (formData.api_key) {
-          updateData.api_key = formData.api_key
+        if (cleanData.api_key) {
+          updateData.api_key = cleanData.api_key
         }
 
         const res = await modelApi.update(currentModel.value.id, updateData)
         if (res.data.success) {
-          ElMessage.success('更新成功')
           dialogVisible.value = false
-          loadModels()
+          waitForGatewayRestart()
         }
       } else {
         // 创建
-        const res = await modelApi.create({
-          name: formData.name,
-          provider: formData.provider,
-          model_name: formData.model_name,
-          api_key: formData.api_key,
-          api_base: formData.api_base,
-          model_type: formData.model_type,
-          parameters: formData.parameters,
-          enabled: formData.enabled
-        })
+        const res = await modelApi.create(cleanData)
         if (res.data.success) {
-          ElMessage.success('创建成功')
           dialogVisible.value = false
-          loadModels()
+          waitForGatewayRestart()
         }
       }
     } catch (error: any) {
@@ -447,21 +500,6 @@ const submitForm = async () => {
       submitting.value = false
     }
   })
-}
-
-const testModel = async (model: ModelConfig) => {
-  model.testing = true
-  try {
-    const res = await modelApi.testConnection(model.id)
-    if (res.data.success) {
-      testResult.value = res.data.data
-      testDialogVisible.value = true
-    }
-  } catch (error: any) {
-    ElMessage.error(error.response?.data?.error || '测试失败')
-  } finally {
-    model.testing = false
-  }
 }
 
 const deleteModel = async (model: ModelConfig) => {
@@ -474,8 +512,7 @@ const deleteModel = async (model: ModelConfig) => {
 
     const res = await modelApi.delete(model.id)
     if (res.data.success) {
-      ElMessage.success('删除成功')
-      loadModels()
+      waitForGatewayRestart()
     }
   } catch (error: any) {
     if (error !== 'cancel') {
@@ -515,6 +552,10 @@ onMounted(() => {
   color: #909399;
 }
 
+.restart-alert {
+  margin-bottom: 20px;
+}
+
 .filter-card {
   margin-bottom: 20px;
 }
@@ -540,9 +581,14 @@ onMounted(() => {
   gap: 8px;
 }
 
-.api-key-masked {
+.api-key-hidden {
   font-family: monospace;
   color: #909399;
+  font-style: italic;
+}
+
+.api-key-none {
+  color: #c0c4cc;
 }
 
 .api-base {
@@ -589,67 +635,15 @@ onMounted(() => {
   flex: 1;
 }
 
-.test-result {
-  text-align: center;
-}
-
-.test-status {
+.clone-hint {
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 8px;
-  font-size: 18px;
-  font-weight: 500;
-  margin-bottom: 20px;
-}
-
-.test-status.success {
-  color: #67c23a;
-}
-
-.test-status.failed {
-  color: #f56c6c;
-}
-
-.test-details {
-  text-align: left;
-  background: #f5f7fa;
-  padding: 16px;
+  padding: 12px 16px;
+  background: #e6f7ff;
   border-radius: 8px;
-}
-
-.detail-item {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.detail-item:last-child {
-  margin-bottom: 0;
-}
-
-.detail-item .label {
-  color: #909399;
-}
-
-.detail-item .value {
-  font-weight: 500;
-}
-
-.test-error {
-  text-align: left;
-  background: #fef0f0;
-  padding: 16px;
-  border-radius: 8px;
-}
-
-.test-error .label {
-  color: #909399;
-  display: block;
-  margin-bottom: 4px;
-}
-
-.test-error .value {
-  color: #f56c6c;
+  margin-bottom: 16px;
+  color: #1890ff;
+  font-size: 14px;
 }
 </style>

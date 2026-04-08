@@ -231,6 +231,7 @@ import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { bindingApi, agentApi, configApi } from '../api'
 import type { BindingConfig, BindingMatch, AgentConfig } from '../api'
+import { createFormRules, sanitizeData } from '../utils/rules'
 
 interface Channel {
   name: string
@@ -266,9 +267,10 @@ const formData = ref({
   peerKind: ''
 })
 
-const formRules = {
-  agentId: [{ required: true, message: '请选择 Agent', trigger: 'change' }]
-}
+// 使用统一校验规则
+const formRules = createFormRules({
+  agentId: 'agentSelect'
+})
 
 // 当前选中渠道的账号列表
 const currentChannelAccounts = computed(() => {
@@ -454,20 +456,28 @@ async function submitForm() {
 
   submitting.value = true
   try {
+    // 清理输入数据
+    const cleanedData = sanitizeData({
+      agentId: formData.value.agentId,
+      channel: formData.value.channel,
+      accountId: formData.value.accountId,
+      peerKind: formData.value.peerKind
+    })
+
     // 构建 match 对象
     const match: BindingMatch = {}
-    if (formData.value.channel) {
-      match.channel = formData.value.channel
+    if (cleanedData.channel) {
+      match.channel = cleanedData.channel
     }
-    if (formData.value.accountId) {
-      match.accountId = formData.value.accountId
+    if (cleanedData.accountId) {
+      match.accountId = cleanedData.accountId
     }
-    if (formData.value.peerKind) {
-      match.peer = { kind: formData.value.peerKind as 'direct' | 'group' }
+    if (cleanedData.peerKind) {
+      match.peer = { kind: cleanedData.peerKind as 'direct' | 'group' }
     }
 
     const data: BindingConfig = {
-      agentId: formData.value.agentId,
+      agentId: cleanedData.agentId,
       match
     }
 

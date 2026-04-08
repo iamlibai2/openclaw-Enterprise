@@ -986,4 +986,111 @@ export const chatApi = {
   }
 }
 
+// ==================== 定时任务 API ====================
+export interface ScheduledTask {
+  id: number
+  name: string
+  agent_id: string
+  task_type: string
+  task_params?: string
+  interval_minutes: number
+  enabled: boolean
+  last_run_at?: string
+  next_run_at?: string
+  created_at: string
+  updated_at?: string
+  last_execution?: TaskExecution
+  execution_count?: number
+}
+
+export interface TaskExecution {
+  id: number
+  task_id: number
+  status: 'pending' | 'running' | 'success' | 'failed'
+  started_at?: string
+  finished_at?: string
+  result?: string
+  error_message?: string
+  is_read: boolean
+  created_at: string
+  task_name?: string
+  task_type?: string
+}
+
+export interface IntervalOption {
+  value: number
+  label: string
+}
+
+export const scheduledTaskApi = {
+  list() {
+    return api.get<{ success: boolean; data: ScheduledTask[]; task_types: Record<string, any>; interval_options: IntervalOption[] }>('/scheduled-tasks')
+  },
+
+  create(data: {
+    name: string
+    agent_id: string
+    task_type: string
+    task_params?: Record<string, any>
+    interval_minutes: number
+  }) {
+    return api.post<{ success: boolean; data: { id: number } }>('/scheduled-tasks', data)
+  },
+
+  update(taskId: number, data: Partial<{
+    name: string
+    agent_id: string
+    task_type: string
+    task_params: Record<string, any>
+    interval_minutes: number
+    enabled: boolean
+  }>) {
+    return api.put<{ success: boolean }>(`/scheduled-tasks/${taskId}`, data)
+  },
+
+  delete(taskId: number) {
+    return api.delete<{ success: boolean }>(`/scheduled-tasks/${taskId}`)
+  },
+
+  runNow(taskId: number) {
+    return api.post<{ success: boolean; data: Record<string, any> }>(`/scheduled-tasks/${taskId}/run`)
+  },
+
+  getExecutions(taskId: number, limit: number = 50) {
+    return api.get<{ success: boolean; data: TaskExecution[] }>(`/scheduled-tasks/${taskId}/executions`, { params: { limit } })
+  },
+
+  getRecentExecutions(limit: number = 20) {
+    return api.get<{ success: boolean; data: TaskExecution[]; unread_count: number }>('/task-executions/recent', { params: { limit } })
+  },
+
+  markRead(executionId: number) {
+    return api.post<{ success: boolean }>(`/task-executions/${executionId}/read`)
+  },
+
+  markAllRead() {
+    return api.post<{ success: boolean }>('/task-executions/read-all')
+  }
+}
+
+// ==================== OpenClaw 日志 API ====================
+export interface LogTailResult {
+  file: string
+  cursor: number
+  size: number
+  lines: string[]
+  truncated: boolean
+  reset: boolean
+}
+
+export const openclawLogsApi = {
+  tail(params?: { cursor?: number; limit?: number; maxBytes?: number; level?: string }) {
+    return api.get<{ success: boolean; data: LogTailResult }>('/openclaw-logs', { params })
+  },
+
+  getFileInfo() {
+    return api.get<{ success: boolean; data: { file: string; size: number } }>('/openclaw-logs/file')
+  }
+}
+
 export default api

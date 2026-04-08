@@ -62,6 +62,10 @@
                     <el-icon><Document /></el-icon>
                     <span>任务列表</span>
                   </el-menu-item>
+                  <el-menu-item index="/scheduled-tasks" v-if="hasPermission('tasks', 'read')">
+                    <el-icon><Clock /></el-icon>
+                    <span>定时任务</span>
+                  </el-menu-item>
                   <el-menu-item index="/image-generator">
                     <el-icon><Picture /></el-icon>
                     <span>图片生成</span>
@@ -158,7 +162,15 @@
                     <el-icon><ChatDotRound /></el-icon>
                     <span>会话列表</span>
                   </el-menu-item>
-                  <el-menu-item index="/logs" v-if="hasPermission('logs', 'read')">
+                  <el-menu-item index="/openclaw-logs" v-if="hasPermission('logs', 'read')">
+                    <el-icon><Tickets /></el-icon>
+                    <span>OpenClaw 日志</span>
+                  </el-menu-item>
+                  <el-menu-item index="/admin-logs" v-if="hasPermission('logs', 'read')">
+                    <el-icon><Notebook /></el-icon>
+                    <span>Admin 日志</span>
+                  </el-menu-item>
+                  <el-menu-item index="/operation-logs" v-if="hasPermission('logs', 'read')">
                     <el-icon><Document /></el-icon>
                     <span>操作日志</span>
                   </el-menu-item>
@@ -172,7 +184,7 @@
                   </template>
                   <el-menu-item index="/models" v-if="hasPermission('models', 'read')">
                     <el-icon><Cpu /></el-icon>
-                    <span>模型配置</span>
+                    <span>OpenClaw用模型配置</span>
                   </el-menu-item>
                   <el-menu-item index="/channels" v-if="hasPermission('config', 'read')">
                     <el-icon><ChatLineSquare /></el-icon>
@@ -196,7 +208,7 @@
                   </el-menu-item>
                   <el-menu-item index="/model-providers">
                     <el-icon><Cpu /></el-icon>
-                    <span>模型配置</span>
+                    <span>系统用模型配置</span>
                   </el-menu-item>
                   <el-menu-item index="/users" v-if="hasPermission('users', 'read')">
                     <el-icon><Avatar /></el-icon>
@@ -238,6 +250,50 @@
                     <div class="panel-item" @click="refreshStatus">
                       <el-icon :class="{ 'is-loading': refreshing }"><Refresh /></el-icon>
                       <span>刷新状态</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 通知中心（仅管理员可见） -->
+                <div class="notification-center" v-if="isAdmin" @click="toggleNotifications" v-click-outside="closeNotifications">
+                  <el-badge :value="unreadCount" :hidden="unreadCount === 0" :max="99">
+                    <el-icon :size="20"><Bell /></el-icon>
+                  </el-badge>
+
+                  <!-- 通知下拉面板 -->
+                  <div class="notification-panel" v-show="showNotifications" @click.stop>
+                    <div class="panel-header">
+                      <span>任务通知</span>
+                      <el-button type="primary" link size="small" @click="markAllRead" v-if="unreadCount > 0">
+                        全部已读
+                      </el-button>
+                    </div>
+                    <div class="panel-body" v-loading="notificationsLoading">
+                      <div
+                        class="notification-item"
+                        v-for="item in notifications"
+                        :key="item.id"
+                        :class="{ unread: !item.is_read }"
+                        @click="viewNotification(item)"
+                      >
+                        <div class="notif-icon">
+                          <el-icon :class="item.status"><component :is="getStatusIcon(item.status)" /></el-icon>
+                        </div>
+                        <div class="notif-content">
+                          <div class="notif-title">{{ item.task_name }}</div>
+                          <div class="notif-desc">
+                            <span :class="['status-text', item.status]">{{ getStatusLabel(item.status) }}</span>
+                            <span class="notif-time">{{ formatNotifTime(item.created_at) }}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="empty-notif" v-if="!notificationsLoading && notifications.length === 0">
+                        <el-icon :size="32"><Bell /></el-icon>
+                        <p>暂无通知</p>
+                      </div>
+                    </div>
+                    <div class="panel-footer">
+                      <el-button type="primary" link @click="goToScheduledTasks">查看全部任务</el-button>
                     </div>
                   </div>
                 </div>
@@ -306,7 +362,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, reactive } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { ElMessage, ElMessageBox, ElNotification, type FormInstance, type FormRules } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import {
   Box,
@@ -338,10 +394,18 @@ import {
   Connection,
   ChatLineSquare,
   Picture,
-  Memo
+  Memo,
+  Clock,
+  Bell,
+  SuccessFilled,
+  CircleCloseFilled,
+  Loading,
+  Tickets,
+  Notebook
 } from '@element-plus/icons-vue'
 import { useUserStore } from './stores/user'
-import { gatewayApi, authApi } from './api'
+import { gatewayApi, authApi, scheduledTaskApi, type TaskExecution } from './api'
+import { getSSEClient, SSEEventTypes } from './utils/sse-client'
 import logoImg from './assets/images/logo.png'
 
 const router = useRouter()
@@ -354,9 +418,22 @@ const gatewayName = ref('')
 const refreshing = ref(false)
 const showGatewayPanel = ref(false)
 
+// 通知中心
+const showNotifications = ref(false)
+const notificationsLoading = ref(false)
+const notifications = ref<TaskExecution[]>([])
+const unreadCount = ref(0)
+let notificationTimer: ReturnType<typeof setInterval> | null = null
+const NOTIFICATION_INTERVAL = 60000 // 1分钟轮询
+
+const isAdmin = computed(() => userStore.user?.role === 'admin')
+
 // Gateway 状态轮询
 let statusTimer: ReturnType<typeof setInterval> | null = null
 const STATUS_CHECK_INTERVAL = 60000 // 60秒检查一次
+
+// SSE 连接
+const sseConnected = ref(false)
 
 const roleLabel = computed(() => {
   const roles: Record<string, string> = {
@@ -381,19 +458,22 @@ const pageTitle = computed(() => {
     '/templates': 'Agent 模板',
     '/bindings': '渠道绑定',
     '/tools': '工具配置',
-    '/models': '模型配置',
+    '/models': 'OpenClaw用模型配置',
     '/memories': '记忆管理',
     '/knowledge-base': '知识库',
     '/tasks': '任务列表',
+    '/scheduled-tasks': '定时任务',
     '/image-generator': '图片生成',
     '/status': '运行状态',
     '/sessions': '会话列表',
-    '/logs': '操作日志',
+    '/openclaw-logs': 'OpenClaw 日志',
+    '/admin-logs': 'Admin 日志',
+    '/operation-logs': '操作日志',
     '/config': '配置编辑',
     '/gateways': 'Gateway 管理',
     '/security': '安全设置',
     '/users': '用户管理',
-    '/model-providers': '模型配置',
+    '/model-providers': '系统用模型配置',
     '/docs': '帮助文档'
   }
 
@@ -509,10 +589,222 @@ const handleLogout = async () => {
   }
 }
 
+// ==================== 通知中心 ====================
+
+async function loadNotifications() {
+  if (!isAdmin.value) return
+
+  try {
+    const res = await scheduledTaskApi.getRecentExecutions(10)
+    if (res.data.success) {
+      notifications.value = res.data.data || []
+      unreadCount.value = res.data.unread_count || 0
+    }
+  } catch (e) {
+    console.error('Failed to load notifications:', e)
+  }
+}
+
+function toggleNotifications() {
+  showNotifications.value = !showNotifications.value
+  if (showNotifications.value) {
+    loadNotifications()
+  }
+}
+
+function closeNotifications() {
+  showNotifications.value = false
+}
+
+async function markAllRead() {
+  try {
+    await scheduledTaskApi.markAllRead()
+    unreadCount.value = 0
+    notifications.value.forEach(n => n.is_read = true)
+  } catch (e) {
+    console.error('Failed to mark all read:', e)
+  }
+}
+
+async function viewNotification(item: TaskExecution) {
+  if (!item.is_read) {
+    try {
+      await scheduledTaskApi.markRead(item.id)
+      item.is_read = true
+      unreadCount.value = Math.max(0, unreadCount.value - 1)
+    } catch (e) {
+      console.error('Failed to mark read:', e)
+    }
+  }
+  showNotifications.value = false
+  router.push('/scheduled-tasks')
+}
+
+function goToScheduledTasks() {
+  showNotifications.value = false
+  router.push('/scheduled-tasks')
+}
+
+function getStatusIcon(status: string) {
+  const icons: Record<string, any> = {
+    success: SuccessFilled,
+    failed: CircleCloseFilled,
+    running: Loading
+  }
+  return icons[status] || CircleCheck
+}
+
+function getStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    pending: '等待中',
+    running: '执行中',
+    success: '执行成功',
+    failed: '执行失败'
+  }
+  return labels[status] || status
+}
+
+function formatNotifTime(time: string): string {
+  const date = new Date(time)
+  const now = new Date()
+  const diff = now.getTime() - date.getTime()
+
+  if (diff < 60000) return '刚刚'
+  if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`
+  return date.toLocaleDateString('zh-CN')
+}
+
+// SSE 事件处理
+function initSSE() {
+  if (!isAdmin.value) return
+
+  const sseClient = getSSEClient()
+
+  // 监听任务结果
+  sseClient.on(SSEEventTypes.TASK_RESULT, (data: any) => {
+    console.log('[SSE] Task result received:', data)
+
+    // 获取任务名称
+    const taskName = data.task_name || `任务 #${data.task_id}`
+
+    // 使用 ElNotification 显示更丰富的通知
+    if (data.status === 'completed') {
+      ElNotification({
+        title: '任务执行完成',
+        message: `任务「${taskName}」已成功执行完成`,
+        type: 'success',
+        duration: 5000,
+        position: 'top-right',
+        onClick: () => {
+          // 点击跳转到定时任务页面
+          router.push('/scheduled-tasks')
+        }
+      })
+      // 播放提示音
+      playNotificationSound('success')
+    } else if (data.status === 'failed') {
+      ElNotification({
+        title: '任务执行失败',
+        message: `任务「${taskName}」执行失败: ${data.error || '未知错误'}`,
+        type: 'error',
+        duration: 0, // 不自动关闭
+        position: 'top-right',
+        onClick: () => {
+          router.push('/scheduled-tasks')
+        }
+      })
+      // 播放提示音
+      playNotificationSound('error')
+    } else if (data.status === 'aborted') {
+      ElNotification({
+        title: '任务已中止',
+        message: `任务「${taskName}」已被中止`,
+        type: 'warning',
+        duration: 5000,
+        position: 'top-right'
+      })
+    }
+
+    // 刷新通知列表
+    loadNotifications()
+  })
+
+  // 监听任务开始
+  sseClient.on(SSEEventTypes.TASK_STARTED, (data: any) => {
+    console.log('[SSE] Task started:', data)
+    const taskName = data.task_name || `任务 #${data.task_id}`
+    ElMessage.info(`任务「${taskName}」开始执行`)
+  })
+
+  // 监听连接状态
+  sseClient.onStatusChange((connected) => {
+    sseConnected.value = connected
+    if (connected) {
+      console.log('[SSE] Connected to server')
+    } else {
+      console.log('[SSE] Disconnected from server')
+    }
+  })
+
+  // 连接
+  sseClient.connect()
+}
+
+// 播放通知声音
+function playNotificationSound(type: 'success' | 'error' | 'warning') {
+  try {
+    // 使用 Web Audio API 生成简单的提示音
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+    const oscillator = audioContext.createOscillator()
+    const gainNode = audioContext.createGain()
+
+    oscillator.connect(gainNode)
+    gainNode.connect(audioContext.destination)
+
+    // 不同类型使用不同频率
+    if (type === 'success') {
+      oscillator.frequency.value = 800
+      oscillator.type = 'sine'
+    } else if (type === 'error') {
+      oscillator.frequency.value = 400
+      oscillator.type = 'square'
+    } else {
+      oscillator.frequency.value = 600
+      oscillator.type = 'triangle'
+    }
+
+    gainNode.gain.setValueAtTime(0.3, audioContext.currentTime)
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3)
+
+    oscillator.start(audioContext.currentTime)
+    oscillator.stop(audioContext.currentTime + 0.3)
+  } catch (e) {
+    // 忽略音频播放错误
+  }
+}
+
+function disconnectSSE() {
+  const sseClient = getSSEClient()
+  sseClient.disconnect()
+}
+
 onMounted(() => {
+  // 先从 localStorage 加载用户信息
+  userStore.loadFromStorage()
+
   checkGatewayStatus()
   // 启动状态轮询
   statusTimer = setInterval(checkGatewayStatus, STATUS_CHECK_INTERVAL)
+
+  // 启动通知轮询（仅管理员）
+  if (isAdmin.value) {
+    loadNotifications()
+    notificationTimer = setInterval(loadNotifications, NOTIFICATION_INTERVAL)
+  }
+
+  // 启动 SSE 连接（仅管理员）
+  initSSE()
 })
 
 onUnmounted(() => {
@@ -520,6 +812,13 @@ onUnmounted(() => {
     clearInterval(statusTimer)
     statusTimer = null
   }
+  if (notificationTimer) {
+    clearInterval(notificationTimer)
+    notificationTimer = null
+  }
+
+  // 断开 SSE
+  disconnectSSE()
 })
 </script>
 
@@ -702,6 +1001,148 @@ onUnmounted(() => {
 .panel-item span {
   font-size: 13px;
   color: #333;
+}
+
+/* 通知中心 */
+.notification-center {
+  position: relative;
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.notification-center:hover {
+  background: #f5f5f5;
+}
+
+.notification-panel {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 8px;
+  width: 360px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+  overflow: hidden;
+}
+
+.notification-panel .panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid #f0f0f0;
+  font-weight: 500;
+}
+
+.notification-panel .panel-body {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.notification-item {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.notification-item:hover {
+  background: #fafafa;
+}
+
+.notification-item.unread {
+  background: #f0f7ff;
+}
+
+.notif-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #f5f5f5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.notif-icon .success {
+  color: #52c41a;
+}
+
+.notif-icon .failed {
+  color: #ff4d4f;
+}
+
+.notif-icon .running {
+  color: #1890ff;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.notif-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.notif-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notif-desc {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.notif-desc .status-text.success {
+  color: #52c41a;
+}
+
+.notif-desc .status-text.failed {
+  color: #ff4d4f;
+}
+
+.notif-desc .status-text.running {
+  color: #1890ff;
+}
+
+.notif-time {
+  color: #999;
+}
+
+.empty-notif {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 0;
+  color: #c0c4cc;
+}
+
+.empty-notif p {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.notification-panel .panel-footer {
+  padding: 12px 16px;
+  border-top: 1px solid #f0f0f0;
+  text-align: center;
 }
 
 .header-divider {

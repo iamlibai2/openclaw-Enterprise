@@ -270,6 +270,7 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 import { Plus, Search, Edit, View, Delete, User, OfficeBuilding, Monitor, Warning, Link } from '@element-plus/icons-vue'
 import { employeeApi, departmentApi, bindingApi, type Employee, type Department, type UnboundAgent, type BindingConfig } from '../api'
 import { useUserStore } from '../stores/user'
+import { createFormRules } from '../utils/rules'
 
 const router = useRouter()
 
@@ -306,9 +307,12 @@ const formData = ref({
   status: 'active'
 })
 
-const rules: FormRules = {
-  name: [{ required: true, message: '请输入员工姓名', trigger: 'blur' }]
-}
+// 使用统一校验规则
+const rules: FormRules = createFormRules({
+  name: 'employeeName',
+  email: 'email',
+  phone: 'phone'
+})
 
 // 扁平化部门列表（用于筛选）
 const flatDepartments = computed(() => {
