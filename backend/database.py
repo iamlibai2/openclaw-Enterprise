@@ -279,12 +279,17 @@ class ModelProvider(Base):
     __tablename__ = 'model_providers'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String(100), unique=True, nullable=False)
+    name = Column(String(100), unique=True, nullable=False)  # 提供商标识
+    display_name = Column(String(100))  # 显示名称
     provider_type = Column(String(50), nullable=False)
+    api_type = Column(String(50))  # API 类型别名
     api_key_encrypted = Column(Text)
+    api_key_env = Column(String(100))  # API Key 环境变量名
     api_base = Column(String(500))
+    base_url = Column(String(500))  # Base URL 别名
     default_model = Column(String(100))
     models = Column(Text)  # JSON 格式的模型列表
+    config_json = Column(Text)  # JSON 配置
     enabled = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -304,6 +309,9 @@ class ImageGenerationHistory(Base):
     height = Column(Integer)
     style = Column(String(50))
     status = Column(String(20), default='pending')
+    size = Column(String(20))  # 图片尺寸：2k, 4k
+    n = Column(Integer, default=1)  # 生成数量
+    images = Column(Text)  # JSON: 生成的图片列表
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -318,6 +326,37 @@ class SystemSetting(Base):
     category = Column(String(50), default='general')
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AgentMoment(Base):
+    """Agent 朋友圈动态表"""
+    __tablename__ = 'agent_moments'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_id = Column(String(50), nullable=False)
+    content = Column(Text, nullable=False)
+    moment_type = Column(String(20), default='work')  # work, life, achievement
+    image_url = Column(Text, nullable=True)  # AI 生成的配图 URL
+    likes = Column(Text, default='[]')  # JSON: 用户ID列表
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # 关系
+    comments = relationship('MomentComment', back_populates='moment', cascade='all, delete-orphan')
+
+
+class MomentComment(Base):
+    """动态评论表"""
+    __tablename__ = 'moment_comments'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    moment_id = Column(Integer, ForeignKey('agent_moments.id'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'))
+    agent_id = Column(String(50))  # 用户或 Agent 评论
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # 关系
+    moment = relationship('AgentMoment', back_populates='comments')
 
 
 # ============================================================================
@@ -376,34 +415,33 @@ class DatabaseCompat:
     """
 
     def __init__(self):
-        self._session = None
+        self._test_session = None
         self._test_mode = False  # 测试模式标志
         # 兼容旧代码中的 db_path 属性
         self.db_path = f"PostgreSQL: {DATABASE_URL.split('@')[1] if '@' in DATABASE_URL else DATABASE_URL}"
 
     def set_test_session(self, session: Session):
         """设置测试 session（用于 pytest）"""
-        self._session = session
+        self._test_session = session
         self._test_mode = True
 
     def clear_test_session(self):
         """清除测试 session"""
-        self._session = None
+        self._test_session = None
         self._test_mode = False
 
     def _get_session(self) -> Session:
-        """获取或创建 Session"""
-        if self._session is None:
-            self._session = SessionLocal()
-        return self._session
+        """获取或创建 Session（每次调用创建新 session，线程安全）"""
+        if self._test_mode and self._test_session:
+            return self._test_session
+        return SessionLocal()
 
-    def _close_session(self):
+    def _close_session(self, session: Session):
         """关闭 Session（测试模式下不关闭）"""
         if self._test_mode:
             return  # 测试模式下不关闭 session
-        if self._session:
-            self._session.close()
-            self._session = None
+        if session:
+            session.close()
 
     def _convert_params(self, query: str, params: tuple) -> tuple:
         """
@@ -469,7 +507,7 @@ class DatabaseCompat:
                 return dict(row._mapping) if hasattr(row, '_mapping') else dict(row)
             return None
         finally:
-            self._close_session()
+            self._close_session(session)
 
     def fetch_all(self, query: str, params: tuple = ()) -> List[Dict]:
         """查询多条记录"""
@@ -481,7 +519,7 @@ class DatabaseCompat:
             rows = result.fetchall()
             return [dict(row._mapping) if hasattr(row, '_mapping') else dict(row) for row in rows]
         finally:
-            self._close_session()
+            self._close_session(session)
 
     def insert(self, table: str, data: Dict) -> int:
         """插入记录"""
@@ -518,7 +556,7 @@ class DatabaseCompat:
             session.rollback()
             raise e
         finally:
-            self._close_session()
+            self._close_session(session)
 
     def update(self, table: str, data: Dict, where: str, where_params: tuple = ()) -> int:
         """更新记录"""
@@ -538,7 +576,7 @@ class DatabaseCompat:
             session.rollback()
             raise e
         finally:
-            self._close_session()
+            self._close_session(session)
 
     def delete(self, table: str, where: str, where_params: tuple = ()) -> int:
         """删除记录"""
@@ -555,7 +593,7 @@ class DatabaseCompat:
             session.rollback()
             raise e
         finally:
-            self._close_session()
+            self._close_session(session)
 
 
 # 全局 db 实例（兼容旧代码）

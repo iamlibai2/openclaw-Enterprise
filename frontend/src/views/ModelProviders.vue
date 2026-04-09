@@ -22,11 +22,12 @@
 
     <!-- Provider 列表 -->
     <div class="providers-grid">
-      <div
+      <el-card
         v-for="provider in providers"
         :key="provider.id"
         class="provider-card"
         :class="{ disabled: !provider.enabled }"
+        :body-style="{ padding: 0 }"
       >
         <div class="card-header">
           <div class="provider-info">
@@ -79,7 +80,7 @@
             删除
           </button>
         </div>
-      </div>
+      </el-card>
 
       <!-- 空状态 -->
       <div v-if="providers.length === 0" class="empty-state">
@@ -93,71 +94,53 @@
     </div>
 
     <!-- 添加/编辑对话框 -->
-    <transition name="fade">
-      <div v-if="dialogVisible" class="dialog-overlay" @click="dialogVisible = false">
-        <div class="dialog-content" @click.stop>
-          <div class="dialog-header">
-            <h2>{{ editingProvider ? '编辑提供商' : '添加提供商' }}</h2>
-            <button class="close-btn" @click="dialogVisible = false">×</button>
-          </div>
+    <el-dialog
+      v-model="dialogVisible"
+      :title="editingProvider ? '编辑提供商' : '添加提供商'"
+      width="500px"
+      :close-on-click-modal="false"
+    >
+      <el-form :model="form" ref="formRef" label-width="140px">
+        <el-form-item label="提供商名称" required>
+          <el-input v-model="form.name" placeholder="例如: volcengine" />
+        </el-form-item>
 
-          <div class="dialog-body">
-            <div class="form-group">
-              <label>提供商名称 <span class="required">*</span></label>
-              <input v-model="form.name" placeholder="例如: volcengine" />
-              <span class="hint">唯一标识符，用于代码中引用</span>
-            </div>
+        <el-form-item label="显示名称" required>
+          <el-input v-model="form.display_name" placeholder="例如: 火山引擎" />
+        </el-form-item>
 
-            <div class="form-group">
-              <label>显示名称 <span class="required">*</span></label>
-              <input v-model="form.display_name" placeholder="例如: 火山引擎" />
-            </div>
+        <el-form-item label="API 类型">
+          <el-select v-model="form.api_type" style="width: 100%">
+            <el-option value="image-generation" label="图片生成" />
+            <el-option value="text-generation" label="文本生成" />
+            <el-option value="speech-synthesis" label="语音合成" />
+            <el-option value="other" label="其他" />
+          </el-select>
+        </el-form-item>
 
-            <div class="form-group">
-              <label>API 类型</label>
-              <select v-model="form.api_type">
-                <option value="image-generation">图片生成</option>
-                <option value="text-generation">文本生成</option>
-                <option value="speech-synthesis">语音合成</option>
-                <option value="other">其他</option>
-              </select>
-            </div>
+        <el-form-item label="Base URL" required>
+          <el-input v-model="form.base_url" placeholder="例如: https://ark.cn-beijing.volces.com/api/v3" />
+        </el-form-item>
 
-            <div class="form-group">
-              <label>Base URL <span class="required">*</span></label>
-              <input v-model="form.base_url" placeholder="例如: https://ark.cn-beijing.volces.com/api/v3" />
-            </div>
+        <el-form-item label="API Key 环境变量" required>
+          <el-input v-model="form.api_key_env" placeholder="例如: VOLCENGINE_API_KEY" />
+        </el-form-item>
 
-            <div class="form-group">
-              <label>API Key 环境变量名 <span class="required">*</span></label>
-              <input v-model="form.api_key_env" placeholder="例如: VOLCENGINE_API_KEY" />
-              <span class="hint">请确保已在服务器环境变量中设置此变量</span>
-            </div>
+        <el-form-item label="模型配置 (JSON)">
+          <el-input
+            v-model="form.config_json"
+            type="textarea"
+            :rows="6"
+            placeholder='{"models": [{"id": "model-id", "name": "模型名称"}]}'
+          />
+        </el-form-item>
+      </el-form>
 
-            <div class="form-group">
-              <label>模型配置 (JSON)</label>
-              <textarea
-                v-model="form.config_json"
-                rows="8"
-                placeholder='{
-  "models": [{
-    "id": "model-id",
-    "name": "模型名称",
-    "capabilities": {}
-  }]
-}'
-              ></textarea>
-              <span class="hint">JSON 格式的模型列表和配置信息</span>
-            </div>
-          </div>
-
-          <div class="dialog-footer">
-            <button class="cancel-btn" @click="dialogVisible = false">取消</button>
-            <button class="confirm-btn" @click="saveProvider">保存</button>
-          </div>
-        </div>
-      </div>
-    </transition>
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveProvider">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -170,6 +153,7 @@ import { validateFields } from '../utils/rules'
 const providers = ref<any[]>([])
 const dialogVisible = ref(false)
 const editingProvider = ref<any>(null)
+const formRef = ref()
 
 const form = ref({
   name: '',
@@ -380,16 +364,16 @@ onMounted(() => {
 }
 
 .provider-card {
-  background: #fff;
-  border-radius: 16px;
-  border: 1px solid #e5e7eb;
+  border-radius: 16px !important;
+  border: 1px solid #e5e7eb !important;
   overflow: hidden;
   transition: transform 0.2s, box-shadow 0.2s;
+  box-shadow: none !important;
 }
 
 .provider-card:hover {
   transform: translateY(-4px);
-  box-shadow: 0 12px 24px rgba(0,0,0,0.08);
+  box-shadow: 0 12px 24px rgba(0,0,0,0.08) !important;
 }
 
 .provider-card.disabled {
@@ -557,163 +541,5 @@ input:checked + .slider:before {
 .empty-state p {
   font-size: 16px;
   margin: 0 0 20px;
-}
-
-/* 对话框 */
-.dialog-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.5);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 9999;
-  padding: 20px;
-}
-
-.dialog-content {
-  background: #fff;
-  border-radius: 16px;
-  width: 100%;
-  max-width: 600px;
-  max-height: 90vh;
-  overflow-y: auto;
-  animation: scale-in 0.3s ease;
-}
-
-.dialog-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 24px;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.dialog-header h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.close-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  border: none;
-  background: #f3f4f6;
-  font-size: 24px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.2s;
-}
-
-.close-btn:hover {
-  background: #e5e7eb;
-}
-
-.dialog-body {
-  padding: 24px;
-}
-
-.form-group {
-  margin-bottom: 20px;
-}
-
-.form-group label {
-  display: block;
-  font-size: 14px;
-  font-weight: 500;
-  color: #374151;
-  margin-bottom: 8px;
-}
-
-.required {
-  color: #ef4444;
-}
-
-.form-group input,
-.form-group select,
-.form-group textarea {
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
-  font-size: 14px;
-  transition: border-color 0.2s, box-shadow 0.2s;
-  font-family: inherit;
-}
-
-.form-group input:focus,
-.form-group select:focus,
-.form-group textarea:focus {
-  outline: none;
-  border-color: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
-}
-
-.form-group textarea {
-  resize: vertical;
-  font-family: 'Monaco', 'Menlo', monospace;
-  font-size: 12px;
-}
-
-.hint {
-  display: block;
-  font-size: 12px;
-  color: #9ca3af;
-  margin-top: 6px;
-}
-
-.dialog-footer {
-  display: flex;
-  gap: 12px;
-  padding: 16px 24px;
-  border-top: 1px solid #e5e7eb;
-  background: #f9fafb;
-}
-
-.cancel-btn,
-.confirm-btn {
-  flex: 1;
-  padding: 10px 20px;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.cancel-btn {
-  background: #fff;
-  border: 1px solid #d1d5db;
-  color: #6b7280;
-}
-
-.cancel-btn:hover {
-  background: #f9fafb;
-  border-color: #9ca3af;
-}
-
-.confirm-btn {
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
-  border: none;
-  color: #fff;
-}
-
-.confirm-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
-}
-
-/* 动画 */
-.fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
-
-@keyframes scale-in {
-  from { opacity: 0; transform: scale(0.95); }
-  to { opacity: 1; transform: scale(1); }
 }
 </style>

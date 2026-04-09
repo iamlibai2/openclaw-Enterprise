@@ -8,6 +8,46 @@ export interface Agent {
   id: string
   name?: string
   modelName?: string
+  description?: string
+}
+
+// ==================== 会话类型 ====================
+
+export type ConversationType = 'single' | 'group'
+
+// 单聊会话
+export interface SingleConversation {
+  id: string
+  type: 'single'
+  agentId: string
+  agentName: string
+  lastMessage?: string
+  lastMessageTime?: number
+  unread?: number
+  sessionKey: string
+}
+
+// 群聊会话
+export interface GroupConversation {
+  id: string
+  type: 'group'
+  name: string
+  hostAgentId: string
+  hostAgentName: string
+  participants: Participant[]
+  lastMessage?: string
+  lastMessageTime?: number
+  unread?: number
+  sessionKey: string
+}
+
+export type Conversation = SingleConversation | GroupConversation
+
+// 群聊参与者
+export interface Participant {
+  agentId: string
+  name: string
+  enabled: boolean
 }
 
 // ==================== Session ====================
@@ -39,9 +79,12 @@ export interface ImageContent {
 export type MessageContent = TextContent | ImageContent
 
 export interface Message {
+  id?: string
   role: 'user' | 'assistant' | 'tool'
   content: MessageContent[]
   timestamp: number
+  sourceAgent?: string
+  sourceName?: string
   usage?: {
     input?: number
     output?: number

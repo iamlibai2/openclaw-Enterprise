@@ -1,7 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useUserStore } from '../stores/user'
 import Agents from '../views/Agents.vue'
-import { ChatPage } from '../chat'
+import { ChatPage, DiscordChat, FeishuChat } from '../chat'
+import { GroupChatPage } from '../group-chat'
 import { AgentProfilePage, AgentGalleryPage } from '../agent'
 import { TasksPage } from '../tasks'
 
@@ -23,11 +24,32 @@ const routes = [
     component: () => import('../views/Dashboard.vue'),
     meta: { requiresAuth: true }
   },
-  // Agent 对话
+  // 消息（Discord 风格）
+  {
+    path: '/messages',
+    name: 'Messages',
+    component: DiscordChat,
+    meta: { requiresAuth: true, permission: 'sessions:read' }
+  },
+  // 飞书聊天
+  {
+    path: '/feishu-chat',
+    name: 'FeishuChat',
+    component: FeishuChat,
+    meta: { requiresAuth: true, permission: 'sessions:read' }
+  },
+  // Agent 对话（原版）
   {
     path: '/chat',
     name: 'Chat',
     component: ChatPage,
+    meta: { requiresAuth: true, permission: 'sessions:read' }
+  },
+  // Agent 群聊
+  {
+    path: '/group-chat',
+    name: 'GroupChat',
+    component: GroupChatPage,
     meta: { requiresAuth: true, permission: 'sessions:read' }
   },
   // 员工管理（一级菜单）
@@ -118,6 +140,13 @@ const routes = [
     name: 'AgentProfile',
     component: AgentProfilePage,
     meta: { requiresAuth: true, permission: 'agents:read' }
+  },
+  // Agent 朋友圈
+  {
+    path: '/moments',
+    name: 'Moments',
+    component: () => import('../views/Moments.vue'),
+    meta: { requiresAuth: true }
   },
   // 工作管理
   {

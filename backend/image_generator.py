@@ -7,6 +7,22 @@ from openai import OpenAI
 from typing import Dict, List, Optional
 import base64
 import time
+import os
+from pathlib import Path
+
+# 加载 .env 文件
+def _load_env():
+    env_file = Path(__file__).parent / '.env'
+    if env_file.exists():
+        with open(env_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    if key not in os.environ:  # 不覆盖已有环境变量
+                        os.environ[key] = value
+
+_load_env()
 
 
 class ImageGenerator:
@@ -138,46 +154,63 @@ def get_image_generator() -> ImageGenerator:
     global _image_generator
     if _image_generator is None:
         import os
-        from database import db
-
-        # 从数据库查询火山引擎配置
-        provider = db.fetch_one(
-            "SELECT * FROM model_providers WHERE name = ? AND enabled = 1",
-            ('volcengine',)
-        )
-
-        if not provider:
-            raise ValueError("数据库中未找到启用的 volcengine provider")
-
-        # 从环境变量读取 API Key
-        api_key_env = provider['api_key_env']
-        api_key = os.environ.get(api_key_env)
-
-        if not api_key:
-            raise ValueError(
-                f"请设置环境变量 {api_key_env}，"
-                f"例如: export {api_key_env}='your-api-key'"
-            )
-
-        base_url = provider['base_url']
-
-        # 解析模型配置
         import json
-        config = json.loads(provider['config_json']) if provider['config_json'] else {}
-        models = config.get('models', [])
 
-        if not models:
-            raise ValueError("volcengine provider 未配置模型")
+        # 使用 SQLAlchemy 查询
+        from db_session import SessionLocal
+        from sqlalchemy import text
 
-        # 使用第一个模型
-        model_config = models[0]
-        model_id = model_config.get('id', 'doubao-seedream-5-0-260128')
-        capabilities = model_config.get('capabilities', {
-            "sizes": ["2k", "4k"],
-            "maxImages": 4,
-            "watermark": False
-        })
+        db_session = SessionLocal()
 
-        _image_generator = ImageGenerator(api_key, base_url, model_id, capabilities)
+        try:
+            result = db_session.execute(
+                text("SELECT * FROM model_providers WHERE name = :name AND enabled = true"),
+                {'name': 'volcengine'}
+            )
+            row = result.fetchone()
+
+            if not row:
+                raise ValueError("数据库中未找到启用的 volcengine provider")
+
+            # 获取列名
+            columns = list(result.keys())
+            provider_dict = dict(zip(columns, row))
+
+            # 从环境变量读取 API Key
+            api_key_env = provider_dict.get('api_key_env')
+            if not api_key_env:
+                raise ValueError("未配置 api_key_env")
+
+            api_key = os.environ.get(api_key_env)
+
+            if not api_key:
+                raise ValueError(
+                    f"请设置环境变量 {api_key_env}，"
+                    f"例如: export {api_key_env}='your-api-key'"
+                )
+
+            base_url = provider_dict.get('api_base')
+
+            # 解析模型配置
+            config_json = provider_dict.get('config_json')
+            config = json.loads(config_json) if config_json else {}
+            models = config.get('models', [])
+
+            if not models:
+                raise ValueError("volcengine provider 未配置模型")
+
+            # 使用第一个模型
+            model_config = models[0]
+            model_id = model_config.get('id', 'doubao-seedream-5-0-260128')
+            capabilities = model_config.get('capabilities', {
+                "sizes": ["2k", "4k"],
+                "maxImages": 4,
+                "watermark": False
+            })
+
+            _image_generator = ImageGenerator(api_key, base_url, model_id, capabilities)
+
+        finally:
+            db_session.close()
 
     return _image_generator

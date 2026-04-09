@@ -2,8 +2,17 @@
  * Chat 模块入口
  */
 
-// 主页面组件
+// Discord 风格聊天页面
+export { default as DiscordChat } from './DiscordChat.vue'
+
+// 飞书风格聊天页面
+export { default as FeishuChat } from './FeishuChat.vue'
+
+// 原版聊天页面
 export { default as ChatPage } from './Chat.vue'
+
+// 微信风格聊天页面
+export { default as ChatPageNew } from './ChatPage.vue'
 
 // 类型
 export * from './types'

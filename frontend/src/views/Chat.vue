@@ -208,14 +208,17 @@ let isManualStop = false
 
 // 加载 Agent 列表
 async function loadAgents() {
+  console.log('[Chat] loadAgents: starting...')
   loadingAgents.value = true
   try {
     const res = await agentApi.list()
+    console.log('[Chat] loadAgents: response success =', res.data.success, 'data length =', res.data.data?.length)
     if (res.data.success) {
       agents.value = res.data.data || []
+      console.log('[Chat] loadAgents: loaded agents =', agents.value.map(a => a.id).join(', '))
     }
   } catch (err: any) {
-    console.error('Failed to load agents:', err)
+    console.error('[Chat] loadAgents FAILED:', err)
   } finally {
     loadingAgents.value = false
   }
@@ -228,18 +231,53 @@ async function selectAgent(agent: AgentInfo) {
   messages.value = []
   chatStream.value = null
   chatRunId.value = null
+  // 保存选择的 Agent，并清空 sessionKey（因为切换 Agent 后旧 session 不适用）
+  saveLastState({ agentId: agent.id, sessionKey: '' })
   await loadSessions()
+}
+
+// 保存上次选择的状态
+// 传入 undefined 或空字符串可以清空对应字段
+function saveLastState(state: { agentId?: string; sessionKey?: string }) {
+  try {
+    const saved = JSON.parse(localStorage.getItem('chat-last-state') || '{}')
+    // 如果传入值（包括空字符串），则更新；否则保留原有值
+    if (state.agentId !== undefined) {
+      saved.agentId = state.agentId || undefined
+    }
+    if (state.sessionKey !== undefined) {
+      saved.sessionKey = state.sessionKey || undefined
+    }
+    localStorage.setItem('chat-last-state', JSON.stringify(saved))
+    console.log('[Chat] Saved state:', saved)
+  } catch (e) {
+    console.error('Failed to save state:', e)
+  }
+}
+
+// 恢复上次选择的状态
+function loadLastState(): { agentId?: string; sessionKey?: string } {
+  try {
+    return JSON.parse(localStorage.getItem('chat-last-state') || '{}')
+  } catch {
+    return {}
+  }
 }
 
 // 加载会话列表
 async function loadSessions() {
-  if (!selectedAgent.value || !client) return
+  if (!selectedAgent.value || !client) {
+    console.log('[Chat] loadSessions SKIP: no agent or client')
+    return
+  }
 
+  console.log('[Chat] loadSessions: requesting sessions.list for agent =', selectedAgent.value.id)
   loadingSessions.value = true
   try {
     const result = await client.request<{ sessions: any[] }>('sessions.list', {
       agentId: selectedAgent.value.id
     })
+    console.log('[Chat] loadSessions: received', result.sessions?.length, 'sessions')
     const allSessions = result.sessions || []
     sessions.value = allSessions
       .filter((s: any) => s.key?.includes('webchat'))
@@ -250,8 +288,9 @@ async function loadSessions() {
         updatedAt: s.updatedAt || Date.now()
       }))
       .sort((a: any, b: any) => b.updatedAt - a.updatedAt)
+    console.log('[Chat] loadSessions: filtered webchat sessions =', sessions.value.length)
   } catch (err: any) {
-    console.error('Failed to load sessions:', err)
+    console.error('[Chat] loadSessions FAILED:', err)
     sessions.value = []
   } finally {
     loadingSessions.value = false
@@ -261,6 +300,8 @@ async function loadSessions() {
 // 选择会话
 async function selectSession(session: SessionInfo) {
   currentSession.value = session
+  // 保存选择的 Session
+  saveLastState({ sessionKey: session.sessionKey })
   await loadMessages()
 }
 
@@ -518,8 +559,10 @@ async function connectGateway() {
       client = createGatewayClient({
         url: gatewayUrl,
         token: gatewayToken,
-        onHello: (hello: GatewayHelloOk) => {
+        onHello: async (hello: GatewayHelloOk) => {
           console.log('[Chat] Gateway hello:', hello)
+          // Gateway 连接成功后，恢复上次选择的状态
+          await restoreLastState()
         },
         onEvent: onChatEvent,
         onClose: (info) => {
@@ -538,8 +581,57 @@ async function connectGateway() {
   }
 }
 
+// 恢复上次选择的 Session（Agent 已在 onMounted 中恢复）
+async function restoreLastState() {
+  console.log('[Chat] restoreLastState START, selectedAgent =', selectedAgent.value?.id, 'client =', client ? 'connected' : 'null')
+
+  if (!selectedAgent.value || !client) {
+    console.log('[Chat] restoreLastState SKIP: no agent or client')
+    return
+  }
+
+  const lastState = loadLastState()
+  console.log('[Chat] restoreLastState: saved state =', JSON.stringify(lastState))
+
+  // 加载 Session 列表
+  console.log('[Chat] restoreLastState: calling loadSessions...')
+  await loadSessions()
+  console.log('[Chat] restoreLastState: sessions loaded, count =', sessions.value.length)
+
+  // 恢复 Session 选择
+  if (lastState.sessionKey && sessions.value.length > 0) {
+    console.log('[Chat] restoreLastState: looking for session =', lastState.sessionKey)
+    const lastSession = sessions.value.find(s => s.sessionKey === lastState.sessionKey)
+    console.log('[Chat] restoreLastState: found session =', lastSession ? 'YES' : 'NO')
+
+    if (lastSession) {
+      await selectSession(lastSession)
+      console.log('[Chat] restoreLastState: DONE, restored session')
+    } else {
+      console.log('[Chat] restoreLastState: session not in list, maybe deleted')
+    }
+  } else {
+    console.log('[Chat] restoreLastState: no saved sessionKey or no sessions')
+  }
+}
+
 onMounted(async () => {
+  // 1. 加载 Agent 列表
   await loadAgents()
+
+  // 2. 在连接 Gateway 之前先恢复 Agent 选择（参考 GroupChat.vue 的设计）
+  const savedState = loadLastState()
+  console.log('[Chat] onMounted: savedState =', savedState, 'agents count =', agents.value.length)
+
+  if (savedState.agentId && agents.value.length > 0) {
+    const lastAgent = agents.value.find(a => a.id === savedState.agentId)
+    if (lastAgent) {
+      selectedAgent.value = lastAgent
+      console.log('[Chat] onMounted: restored agent =', lastAgent.id)
+    }
+  }
+
+  // 3. 连接 Gateway（hello 后再恢复 session 和 messages）
   await connectGateway()
 })
 

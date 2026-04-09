@@ -30,10 +30,34 @@
                   <span>工作台</span>
                 </el-menu-item>
 
+                <!-- 消息（Discord 风格） -->
+                <el-menu-item index="/messages" v-if="hasPermission('sessions', 'read')">
+                  <el-icon><ChatDotRound /></el-icon>
+                  <span>消息</span>
+                </el-menu-item>
+
+                <!-- 飞书聊天 -->
+                <el-menu-item index="/feishu-chat" v-if="hasPermission('sessions', 'read')">
+                  <el-icon><ChatLineRound /></el-icon>
+                  <span>飞书聊天</span>
+                </el-menu-item>
+
                 <!-- Agent 对话 -->
                 <el-menu-item index="/chat" v-if="hasPermission('sessions', 'read')">
                   <el-icon><ChatDotRound /></el-icon>
                   <span>对话</span>
+                </el-menu-item>
+
+                <!-- Agent 群聊 -->
+                <el-menu-item index="/group-chat" v-if="hasPermission('sessions', 'read')">
+                  <el-icon><UserFilled /></el-icon>
+                  <span>群聊讨论</span>
+                </el-menu-item>
+
+                <!-- Agent 朋友圈 -->
+                <el-menu-item index="/moments">
+                  <el-icon><ChatLineSquare /></el-icon>
+                  <span>朋友圈</span>
                 </el-menu-item>
 
                 <!-- 组织管理 -->
@@ -447,7 +471,10 @@ const roleLabel = computed(() => {
 const pageTitle = computed(() => {
   const titles: Record<string, string> = {
     '/dashboard': '团队工作台',
+    '/messages': '消息',
+    '/feishu-chat': '飞书聊天',
     '/chat': 'Agent 对话',
+    '/group-chat': '群聊讨论',
     '/employees': '员工卡片',
     '/departments': '部门管理',
     '/agent-gallery': 'Agent 档案',
@@ -1207,5 +1234,12 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+</style>
+
+<!-- 全局样式：确保 ElMessage 在弹窗遮罩之上 -->
+<style>
+.el-message {
+  z-index: 3000 !important;
 }
 </style>

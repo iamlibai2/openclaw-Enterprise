@@ -14,10 +14,10 @@
     <!-- 用户列表 -->
     <el-card class="table-card">
       <el-table :data="users" stripe v-loading="loading">
-        <el-table-column prop="id" label="ID" width="80" />
-        <el-table-column prop="username" label="用户名" width="120" />
-        <el-table-column prop="display_name" label="显示名称" width="150" />
-        <el-table-column prop="email" label="邮箱" width="180" />
+        <el-table-column prop="id" label="ID" width="60" />
+        <el-table-column prop="username" label="用户名" min-width="150" />
+        <el-table-column prop="display_name" label="显示名称" min-width="120" />
+        <el-table-column prop="email" label="邮箱" min-width="250" />
         <el-table-column label="角色" width="100">
           <template #default="{ row }">
             <el-tag :type="row.role_name === 'admin' ? 'danger' : 'primary'" size="small">
@@ -25,14 +25,6 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="80">
-          <template #default="{ row }">
-            <el-tag :type="row.is_active ? 'success' : 'info'" size="small">
-              {{ row.is_active ? '活跃' : '禁用' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="last_login" label="最后登录" width="180" />
         <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
             <el-button size="small" @click="showEditDialog(row)" :disabled="row.id === 1 && !userStore.isAdmin">
@@ -50,6 +42,19 @@
           </template>
         </el-table-column>
       </el-table>
+
+      <!-- 分页 -->
+      <div class="pagination-container">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :page-sizes="[10, 20, 50]"
+          :total="total"
+          layout="total, sizes, prev, pager, next, jumper"
+          @size-change="handleSizeChange"
+          @current-change="handlePageChange"
+        />
+      </div>
     </el-card>
 
     <!-- 创建/编辑对话框 -->
@@ -116,6 +121,11 @@ const isEdit = ref(false)
 const editingId = ref(0)
 const formRef = ref<FormInstance>()
 
+// 分页状态
+const currentPage = ref(1)
+const pageSize = ref(10)
+const total = ref(0)
+
 const canCreate = computed(() => userStore.hasPermission('users', 'write'))
 const canDelete = computed(() => userStore.hasPermission('users', 'delete'))
 
@@ -165,24 +175,63 @@ const rules: FormRules = {
   }]
 }
 
-async function loadData() {
+/**
+ * 加载用户列表
+ *
+ * users: 用户列表，用于表格展示，支持分页
+ */
+async function loadUsers() {
   loading.value = true
   try {
-    const [usersRes, rolesRes] = await Promise.all([
-      userApi.list(),
-      roleApi.list()
-    ])
-    if (usersRes.data.success) {
-      users.value = usersRes.data.data
-    }
-    if (rolesRes.data.success) {
-      roles.value = rolesRes.data.data
+    const res = await userApi.list(currentPage.value, pageSize.value)
+    if (res.data.success) {
+      users.value = res.data.data
+      total.value = res.data.total
     }
   } catch (e: any) {
     ElMessage.error('加载失败：' + e.message)
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * 加载角色列表
+ *
+ * roles: 角色列表，用于编辑对话框的角色下拉选择
+ * 只在首次加载时获取，不会变化
+ */
+async function loadRoles() {
+  try {
+    const res = await roleApi.list()
+    if (res.data.success) {
+      roles.value = res.data.data
+    }
+  } catch (e: any) {
+    ElMessage.error('加载角色失败：' + e.message)
+  }
+}
+
+/**
+ * 加载全部数据
+ *
+ * 注：删除用户后 roles 不会变化，可以优化为只加载 users
+ * 但当前实现为统一加载，简化逻辑
+ */
+async function loadData() {
+  await Promise.all([loadUsers(), loadRoles()])
+}
+
+// 分页变化处理
+function handleSizeChange(size: number) {
+  pageSize.value = size
+  currentPage.value = 1 // 切换每页条数时重置到第一页
+  loadUsers()
+}
+
+function handlePageChange(page: number) {
+  currentPage.value = page
+  loadUsers()
 }
 
 function showCreateDialog() {
@@ -236,7 +285,7 @@ async function submitForm() {
       if (res.data.success) {
         ElMessage.success('更新成功')
         dialogVisible.value = false
-        loadData()
+        loadUsers()
       } else {
         ElMessage.error(res.data.error)
       }
@@ -247,7 +296,9 @@ async function submitForm() {
       if (res.data.success) {
         ElMessage.success('创建成功')
         dialogVisible.value = false
-        loadData()
+        // 创建后回到第一页显示新用户
+        currentPage.value = 1
+        loadUsers()
       } else {
         ElMessage.error(res.data.error)
       }
@@ -270,7 +321,11 @@ async function deleteUser(user: User) {
     const res = await userApi.delete(user.id)
     if (res.data.success) {
       ElMessage.success('删除成功')
-      loadData()
+      // 如果当前页已无数据且不是第一页，则回到上一页
+      if (users.value.length === 1 && currentPage.value > 1) {
+        currentPage.value--
+      }
+      loadUsers()
     } else {
       ElMessage.error(res.data.error)
     }
@@ -310,5 +365,11 @@ onMounted(() => {
 
 .table-card {
   border-radius: 8px;
+}
+
+.pagination-container {
+  display: flex;
+  justify-content: flex-end;
+  padding: 16px 0 0;
 }
 </style>
