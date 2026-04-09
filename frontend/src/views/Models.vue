@@ -1,52 +1,19 @@
 <template>
-  <div class="page-container">
-    <el-card class="page-header">
-      <div class="header-content">
-        <div>
-          <h1>模型管理</h1>
-          <p>配置和管理 AI 模型，支持 API Key 加密存储</p>
-        </div>
-        <el-button type="primary" @click="showCreateDialog" v-if="permissions.can_edit" :disabled="gatewayRestarting">
+  <div class="models-page">
+    <!-- 页面头部 -->
+    <div class="page-header">
+      <h1>模型管理</h1>
+      <div class="header-actions">
+        <el-button type="primary" @click="showCreateDialog" :disabled="isRestarting" v-if="permissions.can_edit">
           <el-icon><Plus /></el-icon>
           添加模型
         </el-button>
       </div>
-    </el-card>
-
-    <!-- Gateway 重启提示 -->
-    <el-alert
-      v-if="gatewayRestarting"
-      title="Gateway 正在重启生效，正在等待恢复..."
-      type="warning"
-      :closable="false"
-      show-icon
-      class="restart-alert"
-    >
-      <template #default>
-        <span>配置已保存，系统正在自动等待 Gateway 恢复并刷新数据...</span>
-      </template>
-    </el-alert>
-
-    <!-- 提供商筛选 -->
-    <el-card class="filter-card">
-      <div class="filter-content">
-        <span class="filter-label">提供商筛选：</span>
-        <el-radio-group v-model="selectedProvider" @change="filterModels">
-          <el-radio-button label="">全部</el-radio-button>
-          <el-radio-button
-            v-for="provider in providers"
-            :key="provider.id"
-            :label="provider.id"
-          >
-            {{ provider.name }}
-          </el-radio-button>
-        </el-radio-group>
-      </div>
-    </el-card>
+    </div>
 
     <!-- 模型列表 -->
-    <el-card class="content-card">
-      <el-table :data="filteredModels" stripe v-loading="loading || gatewayRestarting">
+    <el-card class="table-card" v-loading="loading || isRestarting" element-loading-text="Gateway 正在重启，请稍候...">
+      <el-table :data="paginatedModels" stripe>
         <el-table-column prop="name" label="名称" width="180">
           <template #default="{ row }">
             <div class="model-name">
@@ -87,7 +54,7 @@
               link
               type="primary"
               @click="showEditDialog(row)"
-              :disabled="gatewayRestarting"
+              :disabled="isRestarting"
               v-if="permissions.can_edit"
             >
               编辑
@@ -96,7 +63,7 @@
               link
               type="success"
               @click="showCloneDialog(row)"
-              :disabled="gatewayRestarting"
+              :disabled="isRestarting"
               v-if="permissions.can_edit"
             >
               克隆
@@ -105,7 +72,7 @@
               link
               type="danger"
               @click="deleteModel(row)"
-              :disabled="gatewayRestarting"
+              :disabled="isRestarting"
               v-if="permissions.can_delete"
             >
               删除
@@ -113,65 +80,56 @@
           </template>
         </el-table-column>
       </el-table>
+      <div class="pagination-wrapper">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="filteredModels.length"
+          layout="total, sizes, prev, pager, next, jumper"
+          background
+        />
+      </div>
     </el-card>
 
     <!-- 创建/编辑对话框 -->
     <el-dialog
       v-model="dialogVisible"
       :title="isEdit ? '编辑模型' : isClone ? '克隆模型' : '添加模型'"
-      width="600px"
-      destroy-on-close
+      width="500px"
+      :close-on-click-modal="false"
     >
-      <div class="clone-hint" v-if="isClone">
-        <el-icon><InfoFilled /></el-icon>
-        <span>基于现有模型创建新配置，可修改提供商和模型名称</span>
-      </div>
-      <el-form
-        ref="formRef"
-        :model="formData"
-        :rules="formRules"
-        label-width="100px"
-      >
+      <el-form :model="formData" :rules="formRules" ref="formRef" label-width="100px">
         <el-form-item label="提供商" prop="provider">
           <el-select
             v-model="formData.provider"
             placeholder="选择提供商"
             @change="onProviderChange"
-            :disabled="isEdit"
+            :disabled="isEdit || isRestarting"
+            style="width: 100%"
           >
             <el-option
               v-for="provider in providers"
               :key="provider.id"
               :label="provider.name"
               :value="provider.id"
-            >
-              <div class="provider-option">
-                <span>{{ provider.name }}</span>
-                <span class="provider-desc">{{ provider.description }}</span>
-              </div>
-            </el-option>
-          </el-select>
-        </el-form-item>
-
-        <el-form-item label="模型名称" prop="model_name">
-          <el-select
-            v-model="formData.model_name"
-            placeholder="选择模型"
-            :disabled="isEdit"
-            filterable
-            allow-create
-          >
-            <el-option
-              v-for="model in currentProviderModels"
-              :key="model"
-              :label="model"
-              :value="model"
             />
           </el-select>
         </el-form-item>
 
+        <el-form-item label="模型名称" prop="model_name">
+          <el-input
+            v-model="formData.model_name"
+            placeholder="输入模型名称（如 glm-5）"
+            :disabled="isEdit || isRestarting"
+          />
+          <div class="form-tip" v-if="!isEdit">
+            模型名称是唯一标识，创建后不可修改
+          </div>
+        </el-form-item>
+
         <el-form-item label="显示名称" prop="name">
-          <el-input v-model="formData.name" placeholder="输入显示名称" />
+          <el-input v-model="formData.name" placeholder="输入显示名称" autocomplete="off" :disabled="isRestarting" />
         </el-form-item>
 
         <el-form-item label="API Key" prop="api_key">
@@ -180,63 +138,35 @@
             type="password"
             placeholder="输入 API Key"
             show-password
+            autocomplete="new-password"
+            :disabled="isRestarting"
           />
-          <div class="form-tip" v-if="isEdit && currentModel?.has_api_key">
-            当前已配置（留空保持不变）
-          </div>
         </el-form-item>
 
         <el-form-item label="API 地址">
-          <el-input v-model="formData.api_base" placeholder="使用默认地址或自定义" />
-          <div class="form-tip" v-if="currentProviderTemplate">
-            默认：{{ currentProviderTemplate.api_base }}
-          </div>
-        </el-form-item>
-
-        <el-form-item label="参数配置">
-          <div class="params-config">
-            <div class="param-item">
-              <span class="param-label">Temperature:</span>
-              <el-slider
-                v-model="formData.parameters.temperature"
-                :min="0"
-                :max="1"
-                :step="0.1"
-                show-input
-                :show-input-controls="false"
-              />
-            </div>
-            <div class="param-item">
-              <span class="param-label">Max Tokens:</span>
-              <el-input-number
-                v-model="formData.parameters.max_tokens"
-                :min="1"
-                :max="128000"
-                :step="1000"
-              />
-            </div>
-            <div class="param-item">
-              <span class="param-label">Context Window:</span>
-              <el-input-number
-                v-model="formData.parameters.context_window"
-                :min="1000"
-                :max="200000"
-                :step="1000"
-              />
-            </div>
-          </div>
+          <el-input v-model="formData.api_base" placeholder="使用默认地址或自定义" :disabled="isRestarting" />
         </el-form-item>
 
         <el-form-item label="状态">
-          <el-switch v-model="formData.enabled" active-text="启用" inactive-text="禁用" />
+          <el-switch v-model="formData.enabled" active-text="启用" inactive-text="禁用" :disabled="isRestarting" />
         </el-form-item>
       </el-form>
 
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitForm" :loading="submitting">
-          {{ isEdit ? '保存' : '创建' }}
-        </el-button>
+        <!-- 编辑模式：单按钮"保存" -->
+        <template v-if="isEdit">
+          <el-button @click="dialogVisible = false" :disabled="isRestarting">取消</el-button>
+          <el-button type="primary" @click="submitEdit" :loading="submitting" :disabled="isRestarting">
+            保存
+          </el-button>
+        </template>
+        <!-- 创建模式：单按钮"创建"，会自动重启 -->
+        <template v-else>
+          <el-button @click="dialogVisible = false" :disabled="isRestarting">取消</el-button>
+          <el-button type="primary" @click="submitCreate" :loading="submitting">
+            {{ isClone ? '克隆' : '创建' }}
+          </el-button>
+        </template>
       </template>
     </el-dialog>
   </div>
@@ -244,26 +174,59 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
-import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus'
-import { Plus, InfoFilled } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
+import { Plus } from '@element-plus/icons-vue'
 import { modelApi, type ModelProvider, type ModelConfig } from '../api'
 import { createFormRules, sanitizeData } from '../utils/rules'
 
-// 使用统一校验规则
-const formRules = createFormRules({
+// 基础校验规则
+const baseRules = createFormRules({
   name: 'modelDisplayName',
   provider: 'providerName',
   model_name: 'modelName'
 })
 
+// 动态校验规则 - 检查模型名称是否已存在
+const formRules = computed<FormRules>(() => ({
+  ...baseRules,
+  model_name: [
+    ...baseRules.model_name,
+    {
+      validator: (rule: any, value: string, callback: any) => {
+        if (!value) {
+          callback()
+          return
+        }
+        // 编辑模式下不检查（原模型名已存在）
+        if (isEdit.value && currentModel.value?.model_name === value) {
+          callback()
+          return
+        }
+        // 克隆和新建模式下检查是否已存在
+        const exists = models.value.some(m => m.model_name === value)
+        if (exists) {
+          callback(new Error('模型名称已存在，请使用其他名称'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur'
+    }
+  ]
+}))
+
 // 状态
 const loading = ref(false)
 const submitting = ref(false)
+const isRestarting = ref(false)  // Gateway 是否正在重启
 const models = ref<ModelConfig[]>([])
 const providers = ref<ModelProvider[]>([])
 const selectedProvider = ref('')
 const permissions = ref({ can_read: true, can_edit: true, can_delete: true })
-const gatewayRestarting = ref(false) // Gateway 重启等待状态
+
+// 分页
+const currentPage = ref(1)
+const pageSize = ref(10)
 
 // 对话框
 const dialogVisible = ref(false)
@@ -293,15 +256,17 @@ const currentProviderTemplate = computed(() => {
   return providers.value.find(p => p.id === formData.provider)
 })
 
-const currentProviderModels = computed(() => {
-  return currentProviderTemplate.value?.models || []
-})
-
 const filteredModels = computed(() => {
   if (!selectedProvider.value) {
     return models.value
   }
   return models.value.filter(m => m.provider === selectedProvider.value)
+})
+
+const paginatedModels = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  const end = start + pageSize.value
+  return filteredModels.value.slice(start, end)
 })
 
 // 方法
@@ -372,10 +337,10 @@ const showCloneDialog = (model: ModelConfig) => {
   isClone.value = true
   currentModel.value = null
 
-  // 复制所有配置，但允许修改关键字段
+  // 复制所有配置，但模型名称需要用户输入新的
   formData.name = model.name + ' (副本)'
   formData.provider = model.provider
-  formData.model_name = model.model_name
+  formData.model_name = ''  // 清空，让用户输入新的模型名称
   formData.api_key = '' // API Key 需要重新输入（敏感信息不复制）
   formData.api_base = model.api_base
   formData.model_type = model.model_type
@@ -412,44 +377,7 @@ const onProviderChange = (providerId: string) => {
   }
 }
 
-// Gateway 重启等待
-const waitForGatewayRestart = async () => {
-  gatewayRestarting.value = true
-  ElMessage({
-    message: '配置已保存，Gateway 正在重启生效...',
-    type: 'success',
-    duration: 3000
-  })
-
-  // 轮询等待 Gateway 恢复（最多等待 30 秒）
-  const maxAttempts = 15
-  let attempts = 0
-
-  while (attempts < maxAttempts) {
-    try {
-      await new Promise(resolve => setTimeout(resolve, 2000)) // 等待 2 秒
-      attempts++
-
-      // 尝试加载模型列表
-      const res = await modelApi.list()
-      if (res.data.success) {
-        models.value = res.data.data
-        gatewayRestarting.value = false
-        ElMessage.success('Gateway 已恢复，数据已刷新')
-        return
-      }
-    } catch (e) {
-      // Gateway 还未恢复，继续等待
-      console.log(`等待 Gateway 恢复... (${attempts}/${maxAttempts})`)
-    }
-  }
-
-  // 超时
-  gatewayRestarting.value = false
-  ElMessage.warning('Gateway 恢复超时，请手动刷新页面')
-}
-
-const submitForm = async () => {
+const submitEdit = async () => {
   if (!formRef.value) return
 
   await formRef.value.validate(async (valid) => {
@@ -457,7 +385,69 @@ const submitForm = async () => {
 
     submitting.value = true
     try {
-      // 统一清理输入
+      const cleanData = sanitizeData({
+        name: formData.name,
+        api_key: formData.api_key,
+        api_base: formData.api_base,
+        parameters: formData.parameters,
+        enabled: formData.enabled
+      })
+
+      const updateData: any = {
+        name: cleanData.name,
+        api_base: cleanData.api_base,
+        parameters: cleanData.parameters,
+        enabled: cleanData.enabled
+      }
+      if (cleanData.api_key) {
+        updateData.api_key = cleanData.api_key
+      }
+
+      const res = await modelApi.update(currentModel.value!.id, updateData)
+      if (res.data.success) {
+        ElMessage.success('保存成功')
+        dialogVisible.value = false
+        loadModels()
+      }
+    } catch (error: any) {
+      ElMessage.error(error.response?.data?.error || '操作失败')
+    } finally {
+      submitting.value = false
+    }
+  })
+}
+
+const submitCreate = async () => {
+  if (!formRef.value) return
+
+  await formRef.value.validate(async (valid) => {
+    if (!valid) return
+
+    // 先弹出确认框
+    try {
+      await ElMessageBox.confirm(
+        '创建模型将会自动重启 Gateway，预计需要 10-30 秒。是否继续？',
+        '创建确认',
+        {
+          type: 'warning',
+          confirmButtonText: '确定创建',
+          cancelButtonText: '取消'
+        }
+      )
+    } catch {
+      return // 用户取消
+    }
+
+    submitting.value = true
+    isRestarting.value = true  // 开始重启，禁用界面
+    const loadingMsg = ElMessage({
+      message: '正在创建模型并重启 Gateway，请稍候...',
+      type: 'info',
+      duration: 0,
+      showClose: false
+    })
+
+    try {
       const cleanData = sanitizeData({
         name: formData.name,
         provider: formData.provider,
@@ -469,35 +459,22 @@ const submitForm = async () => {
         enabled: formData.enabled
       })
 
-      if (isEdit.value && currentModel.value) {
-        // 更新
-        const updateData: any = {
-          name: cleanData.name,
-          api_base: cleanData.api_base,
-          parameters: cleanData.parameters,
-          enabled: cleanData.enabled
-        }
-        if (cleanData.api_key) {
-          updateData.api_key = cleanData.api_key
-        }
+      const res = await modelApi.create(cleanData)
+      loadingMsg.close()
 
-        const res = await modelApi.update(currentModel.value.id, updateData)
-        if (res.data.success) {
-          dialogVisible.value = false
-          waitForGatewayRestart()
-        }
+      if (res.data.success) {
+        ElMessage.success('创建成功')
+        dialogVisible.value = false
+        loadModels()
       } else {
-        // 创建
-        const res = await modelApi.create(cleanData)
-        if (res.data.success) {
-          dialogVisible.value = false
-          waitForGatewayRestart()
-        }
+        ElMessage.error(res.data.error || '创建失败')
       }
     } catch (error: any) {
-      ElMessage.error(error.response?.data?.error || '操作失败')
+      loadingMsg.close()
+      ElMessage.error(error.response?.data?.error || '创建失败')
     } finally {
       submitting.value = false
+      isRestarting.value = false  // 重启完成，恢复界面
     }
   })
 }
@@ -505,19 +482,38 @@ const submitForm = async () => {
 const deleteModel = async (model: ModelConfig) => {
   try {
     await ElMessageBox.confirm(
-      `确定要删除模型 "${model.name}" 吗？`,
+      `删除模型 "${model.name}" 将会自动重启 Gateway，是否继续？`,
       '删除确认',
-      { type: 'warning' }
+      {
+        type: 'warning',
+        confirmButtonText: '确定删除',
+        cancelButtonText: '取消'
+      }
     )
 
+    isRestarting.value = true  // 开始重启，禁用界面
+    const loadingMsg = ElMessage({
+      message: '正在删除模型并重启 Gateway，请稍候...',
+      type: 'info',
+      duration: 0,
+      showClose: false
+    })
+
     const res = await modelApi.delete(model.id)
+    loadingMsg.close()
+
     if (res.data.success) {
-      waitForGatewayRestart()
+      ElMessage.success('删除成功')
+      loadModels()
+    } else {
+      ElMessage.error(res.data.error || '删除失败')
     }
   } catch (error: any) {
     if (error !== 'cancel') {
       ElMessage.error(error.response?.data?.error || '删除失败')
     }
+  } finally {
+    isRestarting.value = false  // 重启完成，恢复界面
   }
 }
 
@@ -529,50 +525,43 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page-container {
-  padding: 0;
+.models-page {
+  max-width: 1200px;
 }
 
 .page-header {
-  margin-bottom: 20px;
-}
-
-.header-content {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  margin-bottom: 20px;
 }
 
 .page-header h1 {
   font-size: 24px;
-  margin-bottom: 8px;
+  color: #303133;
 }
 
-.page-header p {
-  color: #909399;
-}
-
-.restart-alert {
-  margin-bottom: 20px;
-}
-
-.filter-card {
-  margin-bottom: 20px;
-}
-
-.filter-content {
+.header-actions {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
-.filter-label {
-  color: #606266;
-  font-weight: 500;
+.table-card {
+  border-radius: 8px;
 }
 
-.content-card {
-  min-height: 500px;
+.pagination-wrapper {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #ebeef5;
+}
+
+.form-tip {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
 }
 
 .model-name {
@@ -594,56 +583,5 @@ onMounted(() => {
 .api-base {
   color: #606266;
   font-size: 13px;
-}
-
-.provider-option {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.provider-desc {
-  font-size: 12px;
-  color: #909399;
-}
-
-.form-tip {
-  font-size: 12px;
-  color: #909399;
-  margin-top: 4px;
-}
-
-.params-config {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  width: 100%;
-}
-
-.param-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.param-label {
-  min-width: 100px;
-  color: #606266;
-}
-
-.param-item .el-slider {
-  flex: 1;
-}
-
-.clone-hint {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
-  background: #e6f7ff;
-  border-radius: 8px;
-  margin-bottom: 16px;
-  color: #1890ff;
-  font-size: 14px;
 }
 </style>

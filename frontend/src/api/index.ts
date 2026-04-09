@@ -110,8 +110,8 @@ export const authApi = {
 
 // ==================== 用户管理 API ====================
 export const userApi = {
-  list() {
-    return api.get('/users')
+  list(page = 1, limit = 20) {
+    return api.get('/users', { params: { page, limit } })
   },
 
   create(data: CreateUserParams) {
@@ -149,7 +149,8 @@ export const agentApi = {
   },
 
   create(data: AgentConfig) {
-    return api.post('/agents', data)
+    // 创建 Agent 会自动重启 Gateway，需要较长超时
+    return api.post('/agents', data, { timeout: 60000 })
   },
 
   update(id: string, data: Partial<AgentConfig>) {
@@ -161,7 +162,8 @@ export const agentApi = {
   },
 
   apply() {
-    return api.post('/agents/apply')
+    // Gateway 重启可能需要较长时间，设置 60 秒超时
+    return api.post('/agents/apply', {}, { timeout: 60000 })
   }
 }
 
@@ -848,7 +850,7 @@ export const modelApi = {
     return api.get<{ success: boolean; data: ModelConfig }>(`/models/${modelId}`)
   },
 
-  // 创建模型
+  // 创建模型（会自动重启 Gateway）
   create(data: {
     name: string
     provider: string
@@ -859,7 +861,7 @@ export const modelApi = {
     parameters?: Record<string, any>
     enabled?: boolean
   }) {
-    return api.post<{ success: boolean; data: ModelConfig }>('/models', data)
+    return api.post<{ success: boolean; data: ModelConfig }>('/models', data, { timeout: 60000 })
   },
 
   // 更新模型
@@ -876,9 +878,9 @@ export const modelApi = {
     return api.put<{ success: boolean; data: ModelConfig }>(`/models/${modelId}`, data)
   },
 
-  // 删除模型
+  // 删除模型（会自动重启 Gateway）
   delete(modelId: string) {
-    return api.delete<BaseResponse>(`/models/${modelId}`)
+    return api.delete<BaseResponse>(`/models/${modelId}`, { timeout: 60000 })
   },
 
   // 测试模型连接
@@ -1090,6 +1092,57 @@ export const openclawLogsApi = {
 
   getFileInfo() {
     return api.get<{ success: boolean; data: { file: string; size: number } }>('/openclaw-logs/file')
+  }
+}
+
+// ==================== Agent 朋友圈 API ====================
+export interface AgentMoment {
+  id: number
+  agent_id: string
+  agent_name: string
+  agent_avatar?: string
+  content: string
+  moment_type: 'work' | 'life' | 'achievement'
+  image_url?: string  // 配图 URL
+  likes: number[]
+  like_count: number
+  comments: MomentComment[]
+  created_at: string
+  isLiked?: boolean  // 当前用户是否已点赞（前端计算）
+  showCommentInput?: boolean  // 前端状态：是否显示评论输入框
+  newComment?: string  // 前端状态：新评论内容
+}
+
+export interface MomentComment {
+  id: number
+  moment_id: number
+  user_id?: number
+  agent_id?: string
+  user_name?: string
+  agent_name?: string
+  content: string
+  created_at: string
+}
+
+export const momentApi = {
+  list(params?: { page?: number; limit?: number; agent_id?: string }) {
+    return api.get<{ success: boolean; data: AgentMoment[]; total: number; page: number }>('/moments', { params })
+  },
+
+  create(data: { agent_id: string; content: string; moment_type?: string }) {
+    return api.post<{ success: boolean; data: AgentMoment }>('/moments', data)
+  },
+
+  like(momentId: number) {
+    return api.post<{ success: boolean; data: { liked: boolean; like_count: number } }>(`/moments/${momentId}/like`)
+  },
+
+  comment(momentId: number, content: string, agentId?: string) {
+    return api.post<{ success: boolean; data: MomentComment }>(`/moments/${momentId}/comment`, { content, agent_id: agentId })
+  },
+
+  delete(momentId: number) {
+    return api.delete<{ success: boolean }>(`/moments/${momentId}`)
   }
 }
 

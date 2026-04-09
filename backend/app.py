@@ -345,15 +345,30 @@ def change_password():
 @app.route('/api/users', methods=['GET'])
 @require_permission('users', 'read')
 def get_users():
-    """获取用户列表"""
+    """获取用户列表（支持分页）"""
     try:
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 10))
+        offset = (page - 1) * limit
+
         users = db.fetch_all(
             "SELECT u.id, u.username, u.email, u.display_name, u.is_active, "
             "u.last_login, u.created_at, r.name as role_name "
             "FROM users u JOIN roles r ON u.role_id = r.id "
-            "ORDER BY u.id"
+            "ORDER BY u.id LIMIT ? OFFSET ?",
+            (limit, offset)
         )
-        return jsonify({'success': True, 'data': users})
+
+        # 获取总数
+        count = db.fetch_one("SELECT COUNT(*) as total FROM users")
+
+        return jsonify({
+            'success': True,
+            'data': users,
+            'total': count['total'],
+            'page': page,
+            'limit': limit
+        })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -480,9 +495,12 @@ def get_roles():
     """获取角色列表"""
     try:
         roles = db.fetch_all("SELECT id, name, description, permissions, created_at FROM roles ORDER BY id")
+        result = []
         for role in roles:
-            role['permissions'] = json.loads(role['permissions'])
-        return jsonify({'success': True, 'data': roles})
+            role_dict = dict(role)
+            role_dict['permissions'] = json.loads(role_dict['permissions'])
+            result.append(role_dict)
+        return jsonify({'success': True, 'data': result})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -525,7 +543,15 @@ def get_agents():
 
         # 补充每个 agent 的模型名称
         for agent in agents:
-            model_id = agent.get('model', {}).get('primary', '')
+            # model 可能是 dict（{'primary': 'xxx'}）或 str（'default'）
+            model_value = agent.get('model')
+            if isinstance(model_value, dict):
+                model_id = model_value.get('primary', '')
+            elif isinstance(model_value, str):
+                model_id = model_value
+            else:
+                model_id = ''
+
             agent['modelName'] = model_id
             for m in models:
                 if m['id'] == model_id:
@@ -567,10 +593,56 @@ def get_agent(agent_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _wait_for_gateway_restart(start_time=None):
+    """
+    等待 Gateway 重启完成
+    返回: (success: bool, elapsed: int, error: str|None)
+    """
+    import time
+    if start_time is None:
+        start_time = time.time()
+
+    # 1. 等待 Gateway 断开（最多等待 10 秒）
+    logger.info("等待 Gateway 断开...")
+    max_wait_disconnect = 10
+    for i in range(max_wait_disconnect):
+        try:
+            sync_call('agents.list')
+            # 还能连接，继续等待断开
+            time.sleep(1)
+        except Exception:
+            # 已断开
+            logger.info(f"Gateway 已断开 (等待 {i+1} 秒)")
+            break
+    else:
+        logger.warning("Gateway 未在预期时间内断开，继续等待恢复...")
+
+    # 2. 等待 Gateway 恢复（最多等待 50 秒）
+    logger.info("等待 Gateway 恢复...")
+    max_wait_reconnect = 50
+
+    while time.time() - start_time < max_wait_reconnect:
+        try:
+            sync_call('agents.list')
+            # 恢复成功
+            elapsed = int(time.time() - start_time)
+            logger.info(f"Gateway 已恢复 (耗时 {elapsed} 秒)")
+            return True, elapsed, None
+        except Exception:
+            # 还未恢复，继续等待
+            time.sleep(2)
+
+    # 超时未恢复
+    logger.error("Gateway 恢复超时")
+    return False, int(time.time() - start_time), 'Gateway 重启超时，请手动检查状态'
+
+
 @app.route('/api/agents', methods=['POST'])
 @require_permission('agents', 'write')
 def create_agent():
-    """创建 Agent - 通过修改配置"""
+    """创建 Agent - 使用 agents.create + agents.update API（会自动重启 Gateway）"""
+    import time
+
     try:
         data = request.get_json()
 
@@ -578,82 +650,100 @@ def create_agent():
         if not name:
             return jsonify({'success': False, 'error': '缺少 Agent 名称'}), 400
 
-        from agent_profile import AgentGatewayClient, AgentConfig
-        client = AgentGatewayClient()
+        # 预计算 agentId（Gateway 会根据 name 生成：小写 + 移除特殊字符）
+        import re
+        agent_id = name.lower()
+        agent_id = re.sub(r'[^a-z0-9_]', '', agent_id)
+        agent_id = re.sub(r'^[0-9]+', '', agent_id)  # 不能以数字开头
 
-        # 生成或使用自定义 ID
-        agent_id = data.get('id') or name.lower().replace(' ', '_').replace('-', '_')
+        workspace = data.get('workspace')
+        if not workspace:
+            # 默认 workspace 格式：~/.openclaw/workspace-<id>
+            import os
+            workspace = os.path.expanduser(f"~/.openclaw/workspace-{agent_id}")
 
-        # 检查 ID 是否已存在
-        if client.agent_exists(agent_id):
-            return jsonify({'success': False, 'error': f'Agent ID "{agent_id}" 已存在'}), 400
-
-        # 创建配置
-        new_config = AgentConfig(
-            id=agent_id,
-            name=name,
-            workspace=data.get('workspace') or f"~/.openclaw/workspace-{agent_id}",
-            is_default=False
-        )
-
-        # 设置 model
+        # 可选的 model（前端传的是 { primary: modelId } 格式）
+        model_id = None
         if data.get('model'):
-            if isinstance(data['model'], dict):
-                new_config.model = data['model']
-            else:
-                new_config.model = {'primary': data['model']}
+            model_data = data['model']
+            if isinstance(model_data, dict):
+                model_id = model_data.get('primary')
+            elif isinstance(model_data, str):
+                model_id = model_data
 
-        # 添加 Agent 配置
-        client.add_agent(new_config)
+        # 记录开始时间
+        start_time = time.time()
 
-        # 创建初始文件
-        init_files = ['SOUL.md', 'IDENTITY.md', 'USER.md']
-        for filename in init_files:
-            client.set_agent_file(agent_id, filename, f"# {filename.replace('.md', '')}\n\n")
+        # Step 1: 调用 Gateway 的 agents.create API（会自动重启 Gateway）
+        create_params = {
+            'name': name,
+            'workspace': workspace
+        }
+        result = sync_call('agents.create', create_params)
+        agent_id = result.get('agentId')
+        logger.info(f'创建 Agent 成功: {agent_id} - {name}')
 
-        log_operation_direct('create_agent', 'agent', agent_id, json.dumps({'name': name}))
+        # Step 2: 等待 Gateway 重启完成
+        success, elapsed, error = _wait_for_gateway_restart(start_time)
 
+        if not success:
+            return jsonify({'success': False, 'error': error}), 500
+
+        # Step 3: 如果指定了 model，调用 agents.update 设置
+        if model_id:
+            try:
+                update_params = {
+                    'agentId': agent_id,
+                    'model': model_id  # agents.update 的 model 是字符串
+                }
+                sync_call('agents.update', update_params)
+                logger.info(f'设置 Agent {agent_id} 的 model: {model_id}')
+            except Exception as e:
+                logger.warning(f'设置 Agent model 失败（不影响创建）: {e}')
+
+        log_operation_direct('create_agent', 'agent', agent_id, json.dumps({'name': name, 'model': model_id}))
         return jsonify({
             'success': True,
             'data': {'id': agent_id, 'name': name},
-            'message': f'Agent {agent_id} 创建成功'
+            'message': f'Agent {agent_id} 创建成功，Gateway 已重启 (耗时 {elapsed} 秒)'
         })
+
+    except GatewayError as e:
+        logger.error(f'创建 Agent 失败: {e}')
+        return jsonify({'success': False, 'error': f'Gateway 错误: {e.message}'}), 500
     except Exception as e:
+        logger.error(f'创建 Agent 失败: {e}')
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/agents/<agent_id>', methods=['PUT'])
 @require_permission('agents', 'write')
 def update_agent(agent_id):
-    """更新 Agent - 通过修改配置"""
+    """更新 Agent - 使用 agents.update API（热加载，无需重启）"""
     try:
         data = request.get_json()
 
-        # 获取当前配置
-        config = _get_config_via_ws()
-        agents_list = config.get('agents', {}).get('list', [])
+        # 构建更新参数
+        update_params = {'agentId': agent_id}
 
-        # 找到并更新指定 Agent
-        found = False
-        for agent in agents_list:
-            if agent.get('id') == agent_id:
-                found = True
-                # 更新字段
-                if 'name' in data:
-                    agent['name'] = data['name']
-                if 'model' in data:
-                    agent['model'] = data['model']
-                if 'workspace' in data:
-                    agent['workspace'] = data['workspace']
-                break
+        if 'name' in data:
+            update_params['name'] = data['name'].strip()
 
-        if not found:
-            return jsonify({'success': False, 'error': 'Agent 不存在'}), 404
+        if 'model' in data:
+            # model 可能是 {primary: 'xxx'} 或字符串
+            model_value = data['model']
+            if isinstance(model_value, dict):
+                update_params['model'] = model_value.get('primary', '')
+            elif isinstance(model_value, str):
+                update_params['model'] = model_value
 
-        # 应用配置
-        _save_config_via_ws(config)
+        if 'workspace' in data:
+            update_params['workspace'] = data['workspace'].strip()
 
-        log_operation_direct('update_agent', 'agent', agent_id)
+        # 调用 agents.update API（热加载，无需重启）
+        result = sync_call('agents.update', update_params)
+
+        log_operation_direct('update_agent', 'agent', agent_id, json.dumps(data))
 
         return jsonify({
             'success': True,
@@ -698,24 +788,43 @@ def delete_agent(agent_id):
 @app.route('/api/agents/apply', methods=['POST'])
 @require_permission('gateway', 'restart')
 def apply_config():
-    """应用配置（重启 Gateway）"""
+    """应用配置（重启 Gateway 并等待恢复）"""
+    import time
+
     try:
+        # 记录开始时间
+        start_time = time.time()
+
+        # 1. 发送重启命令
+        logger.info("开始重启 Gateway...")
         result = subprocess.run(
             ['openclaw', 'gateway', 'restart'],
             capture_output=True, text=True, timeout=30
         )
 
-        if result.returncode == 0:
+        if result.returncode != 0:
+            return jsonify({'success': False, 'error': result.stderr or 'Gateway 重启命令执行失败'}), 500
+
+        # 2. 等待 Gateway 重启完成
+        success, elapsed, error = _wait_for_gateway_restart(start_time)
+
+        if success:
             log_operation_direct('apply_config', 'gateway')
-            return jsonify({'success': True, 'message': 'Gateway 已重启，配置已生效'})
+            return jsonify({
+                'success': True,
+                'message': f'Gateway 已重启，配置已生效 (耗时 {elapsed} 秒)'
+            })
         else:
-            return jsonify({'success': False, 'error': result.stderr or 'Gateway 重启失败'}), 500
+            return jsonify({'success': False, 'error': error}), 500
+
     except subprocess.TimeoutExpired:
-        return jsonify({'success': False, 'error': 'Gateway 重启超时'}), 500
+        return jsonify({'success': False, 'error': 'Gateway 重启命令执行超时'}), 500
     except FileNotFoundError:
+        # 命令不存在，模拟测试环境
         log_operation_direct('apply_config', 'gateway')
         return jsonify({'success': True, 'message': '模拟重启成功'})
     except Exception as e:
+        logger.error(f"应用配置失败: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -1371,7 +1480,9 @@ def get_models():
 @require_permission('models', 'write')
 @log_operation('创建模型', 'model')
 def create_model():
-    """创建模型配置"""
+    """创建模型配置（会自动重启 Gateway）"""
+    import time
+
     try:
         data = request.get_json()
 
@@ -1381,11 +1492,23 @@ def create_model():
             if not data.get(field):
                 return jsonify({'success': False, 'error': f'{field} 为必填字段'}), 400
 
+        start_time = time.time()
+
         # 创建模型
         model = model_manager.create_model(data)
 
-        logger.info(f'创建模型成功: {model["id"]} - {model["name"]}')
-        return jsonify({'success': True, 'data': model})
+        # 等待 Gateway 重启完成
+        success, elapsed, error = _wait_for_gateway_restart(start_time)
+
+        if success:
+            logger.info(f'创建模型成功: {model["id"]} - {model["name"]}')
+            return jsonify({
+                'success': True,
+                'data': model,
+                'message': f'模型 {model["id"]} 创建成功，Gateway 已重启 (耗时 {elapsed} 秒)'
+            })
+        else:
+            return jsonify({'success': False, 'error': error}), 500
 
     except Exception as e:
         logger.error(f'创建模型失败: {str(e)}')
@@ -1431,14 +1554,26 @@ def update_model(model_id):
 @require_permission('models', 'delete')
 @log_operation('删除模型', 'model')
 def delete_model(model_id):
-    """删除模型配置"""
+    """删除模型配置（会自动重启 Gateway）"""
+    import time
+
     try:
+        start_time = time.time()
         success = model_manager.delete_model(model_id)
         if not success:
             return jsonify({'success': False, 'error': '模型不存在'}), 404
 
-        logger.info(f'删除模型成功: {model_id}')
-        return jsonify({'success': True, 'message': '模型已删除'})
+        # 等待 Gateway 重启完成
+        success, elapsed, error = _wait_for_gateway_restart(start_time)
+
+        if success:
+            logger.info(f'删除模型成功: {model_id}')
+            return jsonify({
+                'success': True,
+                'message': f'模型已删除，Gateway 已重启 (耗时 {elapsed} 秒)'
+            })
+        else:
+            return jsonify({'success': False, 'error': error}), 500
 
     except Exception as e:
         logger.error(f'删除模型失败: {str(e)}')
@@ -3932,21 +4067,24 @@ def get_employees():
         agents = _get_agents_via_ws()
 
         # 为每个员工添加 Agent 信息
+        result = []
         for emp in employees:
-            if emp.get('agent_id'):
-                agent = next((a for a in agents if a['id'] == emp['agent_id']), None)
+            emp_dict = dict(emp)
+            if emp_dict.get('agent_id'):
+                agent = next((a for a in agents if a['id'] == emp_dict['agent_id']), None)
                 if agent:
-                    emp['agent_name'] = agent.get('name')
-                    emp['agent_model'] = agent.get('model', {}).get('primary')
+                    emp_dict['agent_name'] = agent.get('name')
+                    emp_dict['agent_model'] = agent.get('model', {}).get('primary')
                 else:
-                    emp['agent_name'] = None
-                    emp['agent_model'] = None
+                    emp_dict['agent_name'] = None
+                    emp_dict['agent_model'] = None
             else:
-                emp['agent_name'] = None
-                emp['agent_model'] = None
+                emp_dict['agent_name'] = None
+                emp_dict['agent_model'] = None
+            result.append(emp_dict)
 
         # 获取未绑定的 Agent（用于下拉选择）
-        bound_agent_ids = [e['agent_id'] for e in employees if e.get('agent_id')]
+        bound_agent_ids = [e['agent_id'] for e in result if e.get('agent_id')]
         unbound_agents = [a for a in agents if a['id'] not in bound_agent_ids]
 
         user = get_current_user()
@@ -3955,7 +4093,7 @@ def get_employees():
 
         return jsonify({
             'success': True,
-            'data': employees,
+            'data': result,
             'unbound_agents': unbound_agents,
             'permissions': {'can_edit': can_edit, 'can_delete': can_delete}
         })
@@ -4156,13 +4294,16 @@ def get_gateways():
         gateways = db.fetch_all("SELECT * FROM gateways ORDER BY is_default DESC, id")
 
         # 脱敏处理 token
+        result = []
         for gw in gateways:
-            if gw.get('auth_token'):
-                gw['auth_token_masked'] = '******' + gw['auth_token'][-4:] if len(gw['auth_token']) > 4 else '******'
+            gw_dict = dict(gw)
+            if gw_dict.get('auth_token'):
+                gw_dict['auth_token_masked'] = '******' + gw_dict['auth_token'][-4:] if len(gw_dict['auth_token']) > 4 else '******'
             else:
-                gw['auth_token_masked'] = ''
+                gw_dict['auth_token_masked'] = ''
+            result.append(gw_dict)
 
-        return jsonify({'success': True, 'data': gateways})
+        return jsonify({'success': True, 'data': result})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -4189,13 +4330,13 @@ def create_gateway():
 
         # 如果设为默认，取消其他默认
         if is_default:
-            db.execute("UPDATE gateways SET is_default = 0")
+            db.execute("UPDATE gateways SET is_default = FALSE")
 
         gw_id = db.insert('gateways', {
             'name': name,
             'url': url,
             'auth_token': auth_token,
-            'is_default': 1 if is_default else 0,
+            'is_default': bool(is_default),
             'status': 'unknown'
         })
 
@@ -4224,8 +4365,8 @@ def update_gateway(gw_id):
             update_data['auth_token'] = data['auth_token'].strip()
         if 'is_default' in data:
             if data['is_default']:
-                db.execute("UPDATE gateways SET is_default = 0")
-            update_data['is_default'] = 1 if data['is_default'] else 0
+                db.execute("UPDATE gateways SET is_default = FALSE")
+            update_data['is_default'] = bool(data['is_default'])
 
         db.update('gateways', update_data, 'id = ?', (gw_id,))
         log_operation_direct('update_gateway', 'gateway', str(gw_id))
@@ -4257,7 +4398,7 @@ def delete_gateway(gw_id):
         if gw['is_default']:
             first_gw = db.fetch_one("SELECT id FROM gateways LIMIT 1")
             if first_gw:
-                db.update('gateways', {'is_default': 1}, 'id = ?', (first_gw['id'],))
+                db.update('gateways', {'is_default': True}, 'id = ?', (first_gw['id'],))
 
         return jsonify({'success': True, 'message': 'Gateway 已删除'})
     except Exception as e:
@@ -4316,10 +4457,10 @@ def set_default_gateway(gw_id):
             return jsonify({'success': False, 'error': 'Gateway 不存在'}), 404
 
         # 取消其他默认
-        db.execute("UPDATE gateways SET is_default = 0")
+        db.execute("UPDATE gateways SET is_default = FALSE")
 
         # 设置新的默认
-        db.update('gateways', {'is_default': 1}, 'id = ?', (gw_id,))
+        db.update('gateways', {'is_default': True}, 'id = ?', (gw_id,))
 
         # 更新当前使用的 Gateway
         from gateway_sync import set_current_gateway
@@ -4339,21 +4480,25 @@ def get_current_gateway():
         if settings.current_gateway_id is not None:
             gw = db.fetch_one("SELECT * FROM gateways WHERE id = ?", (settings.current_gateway_id,))
         else:
-            gw = db.fetch_one("SELECT * FROM gateways WHERE is_default = 1")
+            gw = db.fetch_one("SELECT * FROM gateways WHERE is_default = TRUE")
 
         if not gw:
             gw = db.fetch_one("SELECT * FROM gateways LIMIT 1")
 
         if gw:
+            # 将 Row 对象转为 dict 以便修改
+            gw_dict = dict(gw)
             # 快速状态检查（不更新数据库，只返回当前状态）
             try:
                 from gateway_sync import sync_call
                 sync_call('agents.list')
-                gw['status'] = 'online'
+                gw_dict['status'] = 'online'
             except Exception:
-                gw['status'] = 'error'
+                gw_dict['status'] = 'error'
 
-        return jsonify({'success': True, 'data': gw})
+            return jsonify({'success': True, 'data': gw_dict})
+
+        return jsonify({'success': True, 'data': None})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -4927,19 +5072,62 @@ def generate_image():
         generator = get_image_generator()
         result = generator.generate(prompt, size=size, n=n)
 
+        # 下载图片到本地
+        import httpx
+        import uuid
+        from pathlib import Path
+
+        upload_dir = Path(__file__).parent / 'uploads' / 'images'
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        local_images = []
+        for img in result.get('images', []):
+            remote_url = img.get('url')
+            if remote_url:
+                try:
+                    filename = f"{uuid.uuid4().hex}.jpeg"
+                    local_path = upload_dir / filename
+
+                    with httpx.Client(timeout=30.0) as client:
+                        response = client.get(remote_url)
+                        if response.status_code == 200:
+                            local_path.write_bytes(response.content)
+                            local_images.append({
+                                'url': f"/api/images/{filename}",
+                                'original_url': remote_url
+                            })
+                        else:
+                            # 下载失败，保留原 URL
+                            local_images.append({'url': remote_url})
+                except Exception as e:
+                    logger.warning(f"下载图片失败: {e}")
+                    local_images.append({'url': remote_url})
+            else:
+                local_images.append(img)
+
+        result['images'] = local_images
+
         # 保存到历史记录
         try:
+            from db_session import SessionLocal
+            from database import ImageGenerationHistory
+
             user = get_current_user()
             user_id = user.get('user_id') if user else None
 
-            import json
-            db.insert('image_generation_history', {
-                'user_id': user_id,
-                'prompt': prompt,
-                'size': size,
-                'n': n,
-                'images': json.dumps(result.get('images', []))
-            })
+            db_session = SessionLocal()
+            history = ImageGenerationHistory(
+                user_id=user_id,
+                prompt=prompt,
+                size=size,
+                n=n,
+                images=json.dumps(local_images),
+                status='completed',
+                created_at=datetime.now()
+            )
+            db_session.add(history)
+            db_session.commit()
+            db_session.close()
         except Exception as e:
             logger.warning(f"保存历史记录失败: {e}")
 
@@ -4953,30 +5141,33 @@ def generate_image():
 @require_auth
 def get_image_history():
     """获取图片生成历史"""
+    from db_session import SessionLocal
+    from database import ImageGenerationHistory
+    from sqlalchemy import text
+
     try:
         user = get_current_user()
         user_id = user.get('user_id')
 
-        # 获取最近的 50 条记录
-        history = db.fetch_all(
-            """SELECT * FROM image_generation_history
-               WHERE user_id = ?
-               ORDER BY created_at DESC
-               LIMIT 50""",
-            (user_id,)
-        )
+        db_session = SessionLocal()
 
-        import json
+        # 获取最近的 50 条记录
+        history = db_session.query(ImageGenerationHistory).filter(
+            ImageGenerationHistory.user_id == user_id
+        ).order_by(ImageGenerationHistory.created_at.desc()).limit(50).all()
+
         result = []
         for item in history:
             result.append({
-                'id': item['id'],
-                'prompt': item['prompt'],
-                'size': item['size'],
-                'n': item['n'],
-                'images': json.loads(item['images']),
-                'created_at': item['created_at']
+                'id': item.id,
+                'prompt': item.prompt,
+                'size': item.size,
+                'n': item.n,
+                'images': json.loads(item.images) if item.images else [],
+                'created_at': item.created_at.isoformat() if item.created_at else None
             })
+
+        db_session.close()
 
         return jsonify({'success': True, 'data': result})
     except Exception as e:
@@ -4988,15 +5179,23 @@ def get_image_history():
 @require_auth
 def delete_image_history(history_id):
     """删除图片生成历史"""
+    from db_session import SessionLocal
+    from database import ImageGenerationHistory
+
     try:
         user = get_current_user()
         user_id = user.get('user_id')
 
+        db_session = SessionLocal()
+
         # 只能删除自己的历史
-        db.execute(
-            "DELETE FROM image_generation_history WHERE id = ? AND user_id = ?",
-            (history_id, user_id)
-        )
+        db_session.query(ImageGenerationHistory).filter(
+            ImageGenerationHistory.id == history_id,
+            ImageGenerationHistory.user_id == user_id
+        ).delete()
+
+        db_session.commit()
+        db_session.close()
 
         return jsonify({'success': True, 'message': '删除成功'})
     except Exception as e:
@@ -5020,14 +5219,16 @@ def list_model_providers():
             result.append({
                 'id': p['id'],
                 'name': p['name'],
-                'display_name': p['display_name'],
-                'base_url': p['base_url'],
-                'api_key_env': p['api_key_env'],
-                'api_type': p['api_type'],
-                'enabled': p['enabled'],
-                'config_json': p['config_json'],
-                'created_at': p['created_at'],
-                'updated_at': p['updated_at']
+                'display_name': p.get('display_name') or p.get('name', ''),  # 兼容旧数据
+                'base_url': p.get('base_url') or p.get('api_base', ''),  # 兼容字段名差异
+                'api_key_env': p.get('api_key_env') or p.get('api_key_encrypted', ''),
+                'api_type': p.get('api_type') or p.get('provider_type', 'openai'),  # 兼容字段名差异
+                'enabled': p.get('enabled', True),
+                'config_json': p.get('config_json'),
+                'default_model': p.get('default_model'),
+                'models': p.get('models'),
+                'created_at': p.get('created_at'),
+                'updated_at': p.get('updated_at')
             })
 
         return jsonify({'success': True, 'data': result})
@@ -5086,13 +5287,15 @@ def create_model_provider():
             return jsonify({'success': False, 'error': '提供商名称已存在'}), 400
 
         # 插入数据
+        api_type = data.get('api_type', 'image-generation')
         provider_id = db.insert('model_providers', {
             'name': data['name'],
             'display_name': data['display_name'],
             'base_url': data['base_url'],
             'api_key_env': data['api_key_env'],
-            'api_type': data.get('api_type', 'image-generation'),
-            'enabled': 1 if data.get('enabled', True) else 0,
+            'api_type': api_type,
+            'provider_type': api_type,  # 同时设置 provider_type (NOT NULL)
+            'enabled': bool(data.get('enabled', True)),
             'config_json': config_json
         })
 
@@ -5123,18 +5326,20 @@ def update_model_provider(provider_id):
         from urllib.parse import urlparse
         import json as json_module
 
-        # 更新数据
+        # 更新数据 - 注意字段名映射到数据库实际字段
         update_data = {}
         if 'display_name' in data:
-            update_data['display_name'] = data['display_name']
+            # display_name -> name (数据库字段名)
+            update_data['name'] = data['display_name']
         if 'base_url' in data:
+            # base_url -> api_base (数据库字段名)
             # Base URL 格式校验
             parsed_url = urlparse(data['base_url'])
             if parsed_url.scheme not in ['http', 'https']:
                 return jsonify({'success': False, 'error': 'Base URL 必须以 http:// 或 https:// 开头'}), 400
             if not parsed_url.netloc:
                 return jsonify({'success': False, 'error': 'Base URL 格式不正确'}), 400
-            update_data['base_url'] = data['base_url']
+            update_data['api_base'] = data['base_url']
         if 'api_key_env' in data:
             # API Key 环境变量名格式校验
             env_pattern = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
@@ -5142,9 +5347,11 @@ def update_model_provider(provider_id):
                 return jsonify({'success': False, 'error': '环境变量名只能包含字母、数字、下划线，且不能以数字开头'}), 400
             update_data['api_key_env'] = data['api_key_env']
         if 'api_type' in data:
+            # api_type -> provider_type (数据库字段名)，同时更新两个字段保持一致
+            update_data['provider_type'] = data['api_type']
             update_data['api_type'] = data['api_type']
         if 'enabled' in data:
-            update_data['enabled'] = 1 if data['enabled'] else 0
+            update_data['enabled'] = bool(data['enabled'])
         if 'config_json' in data:
             # JSON 配置校验
             config_json = data['config_json']
@@ -5184,7 +5391,7 @@ def patch_model_provider(provider_id):
         # 更新数据
         update_data = {}
         if 'enabled' in data:
-            update_data['enabled'] = 1 if data['enabled'] else 0
+            update_data['enabled'] = bool(data['enabled'])
 
         if update_data:
             db.update('model_providers', update_data, 'id = ?', (provider_id,))
@@ -5232,24 +5439,27 @@ def get_scheduled_tasks():
         )
 
         # 补充执行统计
+        result = []
         for task in tasks:
+            task_dict = dict(task)
             # 获取最近一次执行
             last_exec = db.fetch_one(
                 "SELECT * FROM task_executions WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
-                (task['id'],)
+                (task_dict['id'],)
             )
-            task['last_execution'] = last_exec
+            task_dict['last_execution'] = dict(last_exec) if last_exec else None
 
             # 获取执行次数
             count = db.fetch_one(
                 "SELECT COUNT(*) as count FROM task_executions WHERE task_id = ?",
-                (task['id'],)
+                (task_dict['id'],)
             )
-            task['execution_count'] = count['count'] if count else 0
+            task_dict['execution_count'] = count['count'] if count else 0
+            result.append(task_dict)
 
         return jsonify({
             'success': True,
-            'data': tasks,
+            'data': result,
             'task_types': TASK_TYPES,
             'interval_options': INTERVAL_OPTIONS
         })
@@ -5325,7 +5535,7 @@ def update_scheduled_task(task_id):
         if 'interval_minutes' in data:
             update_data['interval_minutes'] = data['interval_minutes']
         if 'enabled' in data:
-            update_data['enabled'] = 1 if data['enabled'] else 0
+            update_data['enabled'] = bool(data['enabled'])
 
         if update_data:
             update_data['updated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -5818,6 +6028,296 @@ def update_setting(key):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# ============================================================================
+# Agent 朋友圈 API
+# ============================================================================
+
+@app.route('/api/moments', methods=['GET'])
+@require_auth
+def get_moments():
+    """获取朋友圈动态列表"""
+    from db_session import SessionLocal
+    from database import AgentMoment, MomentComment
+    from moment_generator import AGENT_NAMES
+
+    try:
+        db_session = SessionLocal()
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 20))
+        agent_id_filter = request.args.get('agent_id')
+        offset = (page - 1) * limit
+
+        # 构建查询
+        query = db_session.query(AgentMoment).order_by(AgentMoment.created_at.desc())
+        if agent_id_filter:
+            query = query.filter(AgentMoment.agent_id == agent_id_filter)
+
+        # 获取总数
+        total = query.count()
+
+        # 获取分页数据
+        moments = query.offset(offset).limit(limit).all()
+
+        # 构建返回结果
+        result = []
+        for m in moments:
+            # 获取评论
+            comments = db_session.query(MomentComment).filter(
+                MomentComment.moment_id == m.id
+            ).order_by(MomentComment.created_at.asc()).all()
+
+            # 解析 likes
+            likes_list = json.loads(m.likes) if m.likes else []
+            like_count = len(likes_list)
+
+            # 构建评论列表
+            comment_list = []
+            for c in comments:
+                comment_data = {
+                    'id': c.id,
+                    'moment_id': c.moment_id,
+                    'content': c.content,
+                    'created_at': c.created_at.isoformat() if c.created_at else None
+                }
+                if c.user_id:
+                    comment_data['user_id'] = c.user_id
+                if c.agent_id:
+                    comment_data['agent_id'] = c.agent_id
+                    comment_data['agent_name'] = AGENT_NAMES.get(c.agent_id, c.agent_id)
+                comment_list.append(comment_data)
+
+            result.append({
+                'id': m.id,
+                'agent_id': m.agent_id,
+                'agent_name': AGENT_NAMES.get(m.agent_id, m.agent_id),
+                'content': m.content,
+                'moment_type': m.moment_type,
+                'image_url': m.image_url,
+                'likes': likes_list,
+                'like_count': like_count,
+                'comments': comment_list,
+                'created_at': m.created_at.isoformat() if m.created_at else None
+            })
+
+        db_session.close()
+
+        return jsonify({
+            'success': True,
+            'data': result,
+            'total': total,
+            'page': page
+        })
+    except Exception as e:
+        print(f"[Moments API] Error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/moments', methods=['POST'])
+@require_auth
+def create_moment_api():
+    """手动创建动态（管理员功能）"""
+    from db_session import SessionLocal
+    from database import AgentMoment
+    from moment_generator import AGENT_NAMES
+
+    try:
+        db_session = SessionLocal()
+        data = request.get_json()
+        agent_id = data.get('agent_id')
+        content = data.get('content')
+        moment_type = data.get('moment_type', 'work')
+
+        if not agent_id or not content:
+            db_session.close()
+            return jsonify({'success': False, 'error': '缺少必要参数'}), 400
+
+        moment = AgentMoment(
+            agent_id=agent_id,
+            content=content,
+            moment_type=moment_type,
+            likes='[]',
+            created_at=datetime.now()
+        )
+        db_session.add(moment)
+        db_session.commit()
+        db_session.refresh(moment)
+
+        result = {
+            'id': moment.id,
+            'agent_id': moment.agent_id,
+            'agent_name': AGENT_NAMES.get(moment.agent_id, moment.agent_id),
+            'content': moment.content,
+            'moment_type': moment.moment_type,
+            'likes': [],
+            'like_count': 0,
+            'comments': [],
+            'created_at': moment.created_at.isoformat() if moment.created_at else None
+        }
+
+        db_session.close()
+
+        return jsonify({
+            'success': True,
+            'data': result
+        })
+    except Exception as e:
+        print(f"[Moments API] Create error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/moments/<int:moment_id>/like', methods=['POST'])
+@require_auth
+def like_moment(moment_id):
+    """点赞动态"""
+    from db_session import SessionLocal
+    from database import AgentMoment
+
+    try:
+        db_session = SessionLocal()
+        user = get_current_user()
+        user_id = user.get('user_id') or user.get('id')  # 兼容两种格式
+
+        # 获取动态
+        moment = db_session.query(AgentMoment).filter(AgentMoment.id == moment_id).first()
+        if not moment:
+            db_session.close()
+            return jsonify({'success': False, 'error': '动态不存在'}), 404
+
+        # 解析点赞列表
+        likes = json.loads(moment.likes) if moment.likes else []
+
+        # 切换点赞状态
+        liked = False
+        if user_id in likes:
+            likes.remove(user_id)
+        else:
+            likes.append(user_id)
+            liked = True
+
+        # 更新
+        moment.likes = json.dumps(likes)
+        db_session.commit()
+        db_session.close()
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'liked': liked,
+                'like_count': len(likes)
+            }
+        })
+    except Exception as e:
+        print(f"[Moments API] Like error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/moments/<int:moment_id>/comment', methods=['POST'])
+@require_auth
+def comment_moment(moment_id):
+    """评论动态"""
+    from db_session import SessionLocal
+    from database import AgentMoment, MomentComment, User
+    from moment_generator import AGENT_NAMES
+
+    try:
+        db_session = SessionLocal()
+        user = get_current_user()
+        data = request.get_json()
+        content = data.get('content', '').strip()
+        agent_id = data.get('agent_id')
+
+        if not content:
+            db_session.close()
+            return jsonify({'success': False, 'error': '评论内容不能为空'}), 400
+
+        # 检查动态是否存在
+        moment = db_session.query(AgentMoment).filter(AgentMoment.id == moment_id).first()
+        if not moment:
+            db_session.close()
+            return jsonify({'success': False, 'error': '动态不存在'}), 404
+
+        # 创建评论
+        user_id = user.get('user_id') or user.get('id')
+        comment = MomentComment(
+            moment_id=moment_id,
+            user_id=user_id if not agent_id else None,
+            agent_id=agent_id,
+            content=content,
+            created_at=datetime.now()
+        )
+        db_session.add(comment)
+        db_session.commit()
+        db_session.refresh(comment)
+
+        result = {
+            'id': comment.id,
+            'moment_id': comment.moment_id,
+            'content': comment.content,
+            'created_at': comment.created_at.isoformat() if comment.created_at else None
+        }
+        if comment.user_id:
+            result['user_id'] = comment.user_id
+            # 获取用户名
+            user_data = db_session.query(User).filter(User.id == comment.user_id).first()
+            if user_data:
+                result['user_name'] = user_data.display_name or user_data.username
+        if comment.agent_id:
+            result['agent_id'] = comment.agent_id
+            result['agent_name'] = AGENT_NAMES.get(comment.agent_id, comment.agent_id)
+
+        db_session.close()
+
+        return jsonify({
+            'success': True,
+            'data': result
+        })
+    except Exception as e:
+        print(f"[Moments API] Comment error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/moments/<int:moment_id>', methods=['DELETE'])
+@require_auth
+def delete_moment(moment_id):
+    """删除动态"""
+    from db_session import SessionLocal
+    from database import AgentMoment, MomentComment
+
+    try:
+        db_session = SessionLocal()
+        # 删除评论
+        db_session.query(MomentComment).filter(MomentComment.moment_id == moment_id).delete()
+        # 删除动态
+        db_session.query(AgentMoment).filter(AgentMoment.id == moment_id).delete()
+        db_session.commit()
+        db_session.close()
+
+        return jsonify({'success': True})
+    except Exception as e:
+        print(f"[Moments API] Delete error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/moments/images/<filename>')
+def get_moment_image(filename):
+    """获取朋友圈动态图片"""
+    from flask import send_from_directory
+    from pathlib import Path
+
+    upload_dir = Path(__file__).parent / 'uploads' / 'moments'
+    return send_from_directory(upload_dir, filename)
+
+
+@app.route('/api/images/<filename>')
+def get_image(filename):
+    """获取图片生成历史的图片"""
+    from flask import send_from_directory
+    from pathlib import Path
+
+    upload_dir = Path(__file__).parent / 'uploads' / 'images'
+    return send_from_directory(upload_dir, filename)
+
+
 if __name__ == '__main__':
     print("=" * 50)
     print("OpenClaw Admin Backend (企业版)")
@@ -5858,7 +6358,7 @@ if __name__ == '__main__':
 
     # 显示实际使用的 Gateway URL（优先从数据库获取）
     try:
-        gateway = db.fetch_one("SELECT url FROM gateways WHERE is_default = 1")
+        gateway = db.fetch_one("SELECT url FROM gateways WHERE is_default = TRUE")
         actual_url = gateway['url'] if gateway else settings.GATEWAY_URL
     except:
         actual_url = settings.GATEWAY_URL
