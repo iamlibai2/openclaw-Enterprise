@@ -1,28 +1,52 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { useUserStore } from '../stores/user'
+import { Login, Register, StaffHome } from '../user'
+import { useUserStore } from '../user/stores'
 import Agents from '../views/Agents.vue'
 import { ChatPage, DiscordChat, FeishuChat } from '../chat'
 import { GroupChatPage } from '../group-chat'
+import { SmartChat } from '../smart-chat'
 import { AgentProfilePage, AgentGalleryPage } from '../agent'
 import { TasksPage } from '../tasks'
+import { WorkflowPage } from '../workflow'
 
 const routes = [
   {
     path: '/login',
     name: 'Login',
-    component: () => import('../views/Login.vue'),
+    component: Login,
+    meta: { requiresAuth: false }
+  },
+  {
+    path: '/register',
+    name: 'Register',
+    component: Register,
     meta: { requiresAuth: false }
   },
   {
     path: '/',
-    redirect: '/dashboard'
+    name: 'Root',
+    redirect: (to) => {
+      const userStore = useUserStore()
+      userStore.loadFromStorage()
+      if (userStore.user?.role === 'staff') {
+        return '/staff-home'
+      }
+      return '/dashboard'
+    }
   },
   // 首页仪表盘
   {
     path: '/dashboard',
     name: 'Dashboard',
     component: () => import('../views/Dashboard.vue'),
-    meta: { requiresAuth: true }
+    meta: { requiresAuth: true, roles: ['admin', 'operator'] }
+  },
+  // 员工首页（staff 角色专用）
+  {
+    path: '/staff-home',
+    name: 'StaffHome',
+    component: StaffHome,
+    meta: { requiresAuth: true, roles: ['staff'] }
   },
   // 消息（Discord 风格）
   {
@@ -43,6 +67,13 @@ const routes = [
     path: '/chat',
     name: 'Chat',
     component: ChatPage,
+    meta: { requiresAuth: true, permission: 'sessions:read' }
+  },
+  // 智能聊天
+  {
+    path: '/smart-chat',
+    name: 'SmartChat',
+    component: SmartChat,
     meta: { requiresAuth: true, permission: 'sessions:read' }
   },
   // Agent 群聊
@@ -146,6 +177,13 @@ const routes = [
     path: '/moments',
     name: 'Moments',
     component: () => import('../views/Moments.vue'),
+    meta: { requiresAuth: true }
+  },
+  // 工作流编排
+  {
+    path: '/workflows',
+    name: 'Workflows',
+    component: WorkflowPage,
     meta: { requiresAuth: true }
   },
   // 工作管理
@@ -283,6 +321,22 @@ router.beforeEach((to, from, next) => {
   // 需要认证但未登录
   if (!userStore.isLoggedIn) {
     return next('/login')
+  }
+
+  // 角色检查
+  const userRole = userStore.user?.role
+  const allowedRoles = to.meta.roles as string[] | undefined
+
+  if (allowedRoles && userRole && !allowedRoles.includes(userRole)) {
+    // staff 用户访问 admin 路由时，重定向到 staff-home
+    if (userRole === 'staff') {
+      return next('/staff-home')
+    }
+    // admin/operator 访问 staff 路由时，重定向到 dashboard
+    if (userRole === 'admin' || userRole === 'operator') {
+      return next('/dashboard')
+    }
+    return next('/403')
   }
 
   // 检查权限

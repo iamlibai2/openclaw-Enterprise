@@ -95,6 +95,9 @@ class Settings:
     # Gateway 认证令牌：优先使用环境变量，否则从配置文件读取
     GATEWAY_AUTH_TOKEN: str = _get_gateway_token()
 
+    # 内部 API Token（用于 Skills 等内部组件调用 API）
+    INTERNAL_API_TOKEN: str = os.environ.get('INTERNAL_API_TOKEN', 'openclaw-internal-skill-token')
+
     # 当前使用的 Gateway ID（None 表示使用默认 Gateway）
     current_gateway_id: int = None
 

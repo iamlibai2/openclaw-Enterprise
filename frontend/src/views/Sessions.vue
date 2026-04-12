@@ -157,7 +157,7 @@
               <!-- 用户消息：右侧蓝色 -->
               <div class="message-row user" v-if="msg.role === 'user' && msg.text">
                 <div class="message-bubble user-bubble">
-                  <div class="message-text">{{ msg.text }}</div>
+                  <div class="message-text" v-html="renderMessageContent(msg.text)"></div>
                   <div class="message-time">{{ formatTime(msg.timestamp) }}</div>
                 </div>
               </div>
@@ -176,7 +176,7 @@
                       </el-collapse-item>
                     </el-collapse>
                   </div>
-                  <div class="message-text" v-if="msg.text">{{ msg.text }}</div>
+                  <div class="message-text" v-if="msg.text" v-html="renderMessageContent(msg.text)"></div>
                   <div class="message-time">{{ formatTime(msg.timestamp) }}</div>
                 </div>
               </div>
@@ -295,7 +295,7 @@ import { ref, onMounted, nextTick, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search, Document, Clock } from '@element-plus/icons-vue'
 import { sessionApi, memoryApi, searchApi, focusApi } from '../api'
-import { marked } from 'marked'
+import { renderMessageContent } from '../utils/markdown'
 
 interface SessionAgent {
   id: string
@@ -395,7 +395,7 @@ const focusLoading = ref(false)
 
 const renderedMemory = computed(() => {
   if (!memoryContent.value) return ''
-  return marked(memoryContent.value)
+  return renderMessageContent(memoryContent.value)
 })
 
 watch(viewMode, async () => {
@@ -1097,8 +1097,72 @@ onMounted(() => {
 .message-text {
   font-size: 14px;
   line-height: 1.6;
-  white-space: pre-wrap;
   word-break: break-word;
+  overflow-x: auto;
+}
+
+.message-text :deep(.markdown-body) {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.message-text :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.message-text :deep(th),
+.message-text :deep(td) {
+  padding: 6px 10px;
+  border: 1px solid #e8e8e8;
+  text-align: left;
+}
+
+.message-text :deep(th) {
+  background: #fafafa;
+  font-weight: 600;
+}
+
+.message-text :deep(tr:nth-child(even)) {
+  background: #fafafa;
+}
+
+.message-text :deep(pre) {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 8px 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.message-text :deep(code) {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.message-text :deep(pre code) {
+  background: none;
+  padding: 0;
+}
+
+.message-text :deep(ul),
+.message-text :deep(ol) {
+  padding-left: 20px;
+  margin: 8px 0;
+}
+
+.message-text :deep(li) {
+  margin: 4px 0;
+}
+
+.message-text :deep(blockquote) {
+  border-left: 3px solid #1890ff;
+  padding-left: 12px;
+  margin: 8px 0;
+  color: #666;
 }
 
 .message-time {
@@ -1207,6 +1271,33 @@ onMounted(() => {
   padding-left: 12px;
   margin: 12px 0;
   color: #666;
+}
+
+.markdown-body :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 13px;
+}
+
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
+  padding: 8px 12px;
+  border: 1px solid #e8e8e8;
+  text-align: left;
+}
+
+.markdown-body :deep(th) {
+  background: #fafafa;
+  font-weight: 600;
+}
+
+.markdown-body :deep(tr:nth-child(even)) {
+  background: #fafafa;
+}
+
+.markdown-body :deep(tr:hover) {
+  background: #f5f5f5;
 }
 
 /* 空状态 */

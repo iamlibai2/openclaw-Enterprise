@@ -3,7 +3,7 @@
  */
 
 import api from '../api'
-import type { AgentProfile, AgentListItem, CloneOptions, ExportOptions } from './types'
+import type { AgentProfile, AgentListItem, CloneOptions, ExportOptions, ExtendedProfile, AgentCapability } from './types'
 
 // 获取 Agent 列表（简化版）
 export async function getAgentList(): Promise<AgentListItem[]> {
@@ -223,4 +223,72 @@ export async function updateExtendedProfile(
   }
 }
 
-import type { ExtendedProfile } from './types'
+// ==================== Agent 能力注册 API ====================
+
+// 获取 Agent 能力信息
+export async function getAgentCapability(agentId: string): Promise<AgentCapability | null> {
+  try {
+    const res = await api.get<{ success: boolean; data: AgentCapability }>(
+      `/employee-agent/agents/${agentId}/capability`
+    )
+    return res.data.data || null
+  } catch {
+    return null
+  }
+}
+
+// 注册 Agent 能力
+export async function registerAgentCapability(
+  agentId: string,
+  data: {
+    capabilities: string[]
+    skills: string[]
+    expertiseLevel: Record<string, number>
+  }
+): Promise<{ success: boolean; message?: string }> {
+  try {
+    const res = await api.put<{ success: boolean; error?: string }>(
+      `/employee-agent/agents/${agentId}/capability`,
+      data
+    )
+    return {
+      success: res.data.success,
+      message: res.data.error
+    }
+  } catch (e: any) {
+    return { success: false, message: e.message }
+  }
+}
+
+// 更新 Agent 状态
+export async function updateAgentCapabilityStatus(
+  agentId: string,
+  status: 'idle' | 'busy',
+  currentTasks?: number
+): Promise<boolean> {
+  try {
+    const res = await api.put<{ success: boolean }>(
+      `/employee-agent/agents/${agentId}/status`,
+      { status, currentTasks }
+    )
+    return res.data.success
+  } catch {
+    return false
+  }
+}
+
+// 查询具有指定能力的 Agent
+export async function queryAgentsByCapability(
+  capability: string,
+  status?: string
+): Promise<AgentCapability[]> {
+  try {
+    const res = await api.get<{ success: boolean; data: AgentCapability[] }>(
+      `/employee-agent/agents/capability/${capability}`,
+      { params: { status } }
+    )
+    return res.data.data || []
+  } catch {
+    return []
+  }
+}

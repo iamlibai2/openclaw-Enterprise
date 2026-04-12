@@ -21,6 +21,8 @@ from model_manager import model_manager, PROVIDER_TEMPLATES
 from channel_manager import channel_manager, CHANNEL_TYPES
 from config_sync import config_sync
 from agent_profile import bp as agent_profile_bp
+from workflow.routes import bp as workflow_bp
+from employee_agent_routes import bp as employee_agent_bp
 from security import (
     add_security_headers, get_cors_config,
     rate_limit, sanitize_input, sanitize_dict
@@ -41,6 +43,8 @@ CORS(app, **get_cors_config())
 
 # 注册蓝图
 app.register_blueprint(agent_profile_bp)
+app.register_blueprint(workflow_bp)
+app.register_blueprint(employee_agent_bp)
 
 # 添加安全响应头
 @app.after_request
@@ -251,6 +255,95 @@ def logout():
     return jsonify({'success': True, 'message': '登出成功'})
 
 
+@app.route('/api/auth/register', methods=['POST'])
+@rate_limit(max_requests=100, window_seconds=60)  # 放宽限制，适应企业内部批量注册
+def register():
+    """员工注册 - 自动创建用户和员工档案"""
+    try:
+        data = request.get_json()
+        name = sanitize_input(data.get('name', '')).strip()
+        email = sanitize_input(data.get('email', '')).strip().lower()
+        password = data.get('password', '')
+        phone = sanitize_input(data.get('phone', '')).strip()
+
+        # 验证必填字段
+        if not name or not email or not password:
+            return jsonify({'success': False, 'error': '姓名、邮箱和密码为必填项'}), 400
+
+        # 验证邮箱格式
+        import re
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, email):
+            return jsonify({'success': False, 'error': '邮箱格式不正确'}), 400
+
+        # 验证密码强度
+        if len(password) < 6:
+            return jsonify({'success': False, 'error': '密码至少需要6个字符'}), 400
+
+        # 检查邮箱是否已注册
+        existing_user = db.fetch_one("SELECT id FROM users WHERE email = ?", (email,))
+        if existing_user:
+            return jsonify({'success': False, 'error': '该邮箱已被注册'}), 400
+
+        # 检查用户名（邮箱作为用户名）是否已存在
+        existing_username = db.fetch_one("SELECT id FROM users WHERE username = ?", (email,))
+        if existing_username:
+            return jsonify({'success': False, 'error': '该邮箱已被注册'}), 400
+
+        # 获取 staff 角色
+        staff_role = db.fetch_one("SELECT id FROM roles WHERE name = 'staff'")
+        if not staff_role:
+            return jsonify({'success': False, 'error': '系统配置错误：staff 角色不存在'}), 500
+
+        # 创建用户
+        user_id = db.insert('users', {
+            'username': email,
+            'password_hash': hash_password(password),
+            'email': email,
+            'display_name': name,
+            'role_id': staff_role['id'],
+            'is_active': True
+        })
+
+        # 创建员工档案
+        emp_id = db.insert('employees', {
+            'name': name,
+            'email': email,
+            'phone': phone or None,
+            'user_id': user_id,
+            'status': 'active'
+        })
+
+        # 更新员工的 user_id 关联（如果需要）
+        # 注：insert 时已经设置了 user_id
+
+        # 记录注册日志
+        log_operation_direct('register', 'user', str(user_id))
+
+        # 生成 Token（自动登录）
+        access_token, refresh_token = generate_tokens(user_id, email, 'staff')
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'access_token': access_token,
+                'refresh_token': refresh_token,
+                'user': {
+                    'id': user_id,
+                    'username': email,
+                    'display_name': name,
+                    'role': 'staff',
+                    'permissions': {'agents': ['read'], 'sessions': ['read'], 'memories': ['read']}
+                },
+                'employee_id': emp_id
+            },
+            'message': '注册成功'
+        })
+    except Exception as e:
+        logger.error(f"注册失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/auth/me', methods=['GET'])
 @require_auth
 def get_current_user_info():
@@ -267,18 +360,41 @@ def get_current_user_info():
     if not user_info:
         return jsonify({'success': False, 'error': '用户不存在'}), 404
 
-    return jsonify({
-        'success': True,
-        'data': {
-            'id': user_info['id'],
-            'username': user_info['username'],
-            'email': user_info['email'],
-            'display_name': user_info['display_name'],
-            'role': user_info['role_name'],
-            'permissions': json.loads(user_info['permissions']),
-            'last_login': user_info['last_login']
+    # 查询关联的员工信息
+    employee = db.fetch_one(
+        "SELECT e.id, e.name, e.agent_ids, e.department_id, d.name as department_name "
+        "FROM employees e LEFT JOIN departments d ON e.department_id = d.id "
+        "WHERE e.user_id = ?",
+        (user['user_id'],)
+    )
+
+    result = {
+        'id': user_info['id'],
+        'username': user_info['username'],
+        'email': user_info['email'],
+        'display_name': user_info['display_name'],
+        'role': user_info['role_name'],
+        'permissions': json.loads(user_info['permissions']),
+        'last_login': user_info['last_login']
+    }
+
+    if employee:
+        # 解析 agent_ids
+        agent_ids = []
+        if employee.get('agent_ids'):
+            try:
+                agent_ids = json.loads(employee['agent_ids']) if isinstance(employee['agent_ids'], str) else employee['agent_ids']
+            except:
+                agent_ids = []
+        result['employee'] = {
+            'id': employee['id'],
+            'name': employee['name'],
+            'agent_ids': agent_ids,
+            'department_id': employee['department_id'],
+            'department_name': employee['department_name']
         }
-    })
+
+    return jsonify({'success': True, 'data': result})
 
 
 @app.route('/api/auth/refresh', methods=['POST'])
@@ -387,6 +503,11 @@ def create_user():
 
         if not username or not password:
             return jsonify({'success': False, 'error': '缺少用户名或密码'}), 400
+
+        # 用户名格式验证：字母开头，只能包含字母、数字、下划线、连字符
+        import re
+        if not re.match(r'^[a-zA-Z][a-zA-Z0-9_-]*$', username):
+            return jsonify({'success': False, 'error': '用户名必须以字母开头，只能包含字母、数字、下划线、连字符'}), 400
 
         if len(password) < 6:
             return jsonify({'success': False, 'error': '密码至少6位'}), 400
@@ -534,8 +655,38 @@ def update_role(role_id):
 def get_agents():
     """获取所有 Agent - 通过 WebSocket"""
     try:
-        # 使用合并了 workspace 信息的函数
-        agents = _get_agents_via_ws()
+        user = get_current_user()
+        role = user.get('role', '')
+
+        # staff 角色只能看自己绑定的 agents
+        if role == 'staff':
+            # 查询员工绑定的 agent_ids
+            employee = db.fetch_one(
+                "SELECT agent_ids FROM employees WHERE user_id = ?",
+                (user['user_id'],)
+            )
+
+            if not employee or not employee.get('agent_ids'):
+                # 没有绑定 agent，返回空列表
+                return jsonify({
+                    'success': True,
+                    'data': [],
+                    'models': [],
+                    'permissions': {'can_edit': False, 'can_delete': False}
+                })
+
+            # 解析 agent_ids JSON 数组
+            try:
+                bound_agent_ids = json.loads(employee['agent_ids']) if isinstance(employee['agent_ids'], str) else employee['agent_ids']
+            except:
+                bound_agent_ids = []
+
+            # 只返回绑定的 agents
+            all_agents = _get_agents_via_ws()
+            agents = [a for a in all_agents if a.get('id') in bound_agent_ids]
+        else:
+            # admin/operator/viewer 可以看所有 agent
+            agents = _get_agents_via_ws()
 
         # 获取模型列表
         models_result = sync_call('models.list')
@@ -559,7 +710,6 @@ def get_agents():
                     break
 
         # 检查用户权限，标记是否可编辑
-        user = get_current_user()
         can_edit = has_permission(user, 'agents', 'write')
         can_delete = has_permission(user, 'agents', 'delete')
 
@@ -4060,7 +4210,7 @@ def get_employees():
             FROM employees e
             LEFT JOIN departments d ON e.department_id = d.id
             LEFT JOIN employees m ON e.manager_id = m.id
-            ORDER BY e.id
+            ORDER BY e.id DESC
         """)
 
         # 获取所有 Agent 信息
@@ -4068,24 +4218,45 @@ def get_employees():
 
         # 为每个员工添加 Agent 信息
         result = []
+        all_bound_agent_ids = set()
         for emp in employees:
             emp_dict = dict(emp)
-            if emp_dict.get('agent_id'):
-                agent = next((a for a in agents if a['id'] == emp_dict['agent_id']), None)
+            # 解析 agent_ids JSON 数组
+            agent_ids = []
+            if emp_dict.get('agent_ids'):
+                try:
+                    agent_ids = json.loads(emp_dict['agent_ids']) if isinstance(emp_dict['agent_ids'], str) else emp_dict['agent_ids']
+                except:
+                    agent_ids = []
+            emp_dict['agent_ids'] = agent_ids
+
+            # 添加每个 agent 的详细信息
+            emp_dict['agents'] = []
+            for aid in agent_ids:
+                agent = next((a for a in agents if a['id'] == aid), None)
                 if agent:
-                    emp_dict['agent_name'] = agent.get('name')
-                    emp_dict['agent_model'] = agent.get('model', {}).get('primary')
-                else:
-                    emp_dict['agent_name'] = None
-                    emp_dict['agent_model'] = None
-            else:
-                emp_dict['agent_name'] = None
-                emp_dict['agent_model'] = None
+                    # model 可能是 dict 或 str
+                    model_val = agent.get('model')
+                    if isinstance(model_val, dict):
+                        model_str = model_val.get('primary')
+                    else:
+                        model_str = model_val
+                    emp_dict['agents'].append({
+                        'id': aid,
+                        'name': agent.get('name'),
+                        'model': model_str
+                    })
+                all_bound_agent_ids.add(aid)
+
+            # 兼容旧字段
+            emp_dict['agent_id'] = agent_ids[0] if agent_ids else None
+            emp_dict['agent_name'] = emp_dict['agents'][0]['name'] if emp_dict['agents'] else None
+            emp_dict['agent_model'] = emp_dict['agents'][0]['model'] if emp_dict['agents'] else None
+
             result.append(emp_dict)
 
         # 获取未绑定的 Agent（用于下拉选择）
-        bound_agent_ids = [e['agent_id'] for e in result if e.get('agent_id')]
-        unbound_agents = [a for a in agents if a['id'] not in bound_agent_ids]
+        unbound_agents = [a for a in agents if a['id'] not in all_bound_agent_ids]
 
         user = get_current_user()
         can_edit = has_permission(user, 'employees', 'write')
@@ -4116,15 +4287,32 @@ def get_employee(emp_id):
         if not emp:
             return jsonify({'success': False, 'error': '员工不存在'}), 404
 
-        # 添加 Agent 信息
-        if emp.get('agent_id'):
-            agent = _get_agent_via_ws(emp['agent_id'])
+        # 解析 agent_ids
+        agent_ids = []
+        if emp.get('agent_ids'):
+            try:
+                agent_ids = json.loads(emp['agent_ids']) if isinstance(emp['agent_ids'], str) else emp['agent_ids']
+            except:
+                agent_ids = []
+        emp['agent_ids'] = agent_ids
+
+        # 添加每个 Agent 的详细信息
+        emp['agents'] = []
+        for aid in agent_ids:
+            agent = _get_agent_via_ws(aid)
             if agent:
-                emp['agent_info'] = agent
+                emp['agents'].append({
+                    'id': aid,
+                    'name': agent.get('name'),
+                    'model': agent.get('model', {}).get('primary')
+                })
+
+        # 兼容旧字段
+        emp['agent_id'] = agent_ids[0] if agent_ids else None
 
         # 获取下属员工
         subordinates = db.fetch_all(
-            "SELECT id, name, agent_id FROM employees WHERE manager_id = ?",
+            "SELECT id, name, agent_ids FROM employees WHERE manager_id = ?",
             (emp_id,)
         )
 
@@ -4143,21 +4331,27 @@ def create_employee():
     """创建员工"""
     try:
         data = request.get_json()
-        name = data.get('name', '').strip()
-        email = data.get('email', '').strip() or None
-        phone = data.get('phone', '').strip() or None
+        name = (data.get('name') or '').strip()
+        email = (data.get('email') or '').strip() or None
+        phone = (data.get('phone') or '').strip() or None
         department_id = data.get('department_id')
         manager_id = data.get('manager_id')
-        agent_id = data.get('agent_id')
+        agent_ids = data.get('agent_ids', [])  # 支持多个 agent
 
         if not name:
             return jsonify({'success': False, 'error': '员工姓名不能为空'}), 400
 
-        # 检查 agent_id 是否已被绑定
-        if agent_id:
-            existing = db.fetch_one("SELECT id FROM employees WHERE agent_id = ?", (agent_id,))
-            if existing:
-                return jsonify({'success': False, 'error': '该 Agent 已被其他员工绑定'}), 400
+        # 检查 agent_ids 是否已被绑定
+        if agent_ids:
+            all_employees = db.fetch_all("SELECT id, name, agent_ids FROM employees WHERE agent_ids IS NOT NULL")
+            for emp in all_employees:
+                try:
+                    bound_ids = json.loads(emp['agent_ids']) if emp['agent_ids'] else []
+                    for aid in agent_ids:
+                        if aid in bound_ids:
+                            return jsonify({'success': False, 'error': f'Agent {aid} 已被 {emp["name"]} 绑定'}), 400
+                except:
+                    pass
 
         emp_id = db.insert('employees', {
             'name': name,
@@ -4165,7 +4359,7 @@ def create_employee():
             'phone': phone,
             'department_id': department_id,
             'manager_id': manager_id,
-            'agent_id': agent_id
+            'agent_ids': json.dumps(agent_ids) if agent_ids else None
         })
 
         log_operation_direct('create_employee', 'employee', str(emp_id), json.dumps({'name': name}))
@@ -4183,11 +4377,11 @@ def update_employee(emp_id):
         update_data = {}
 
         if 'name' in data:
-            update_data['name'] = data['name'].strip()
+            update_data['name'] = data['name'].strip() if data['name'] else None
         if 'email' in data:
-            update_data['email'] = data['email'].strip() or None
+            update_data['email'] = data['email'].strip() if data['email'] else None
         if 'phone' in data:
-            update_data['phone'] = data['phone'].strip() or None
+            update_data['phone'] = data['phone'].strip() if data['phone'] else None
         if 'department_id' in data:
             update_data['department_id'] = data['department_id']
         if 'manager_id' in data:
@@ -4195,18 +4389,20 @@ def update_employee(emp_id):
         if 'status' in data:
             update_data['status'] = data['status']
 
-        # 处理 Agent 绑定
-        if 'agent_id' in data:
-            new_agent_id = data['agent_id']
-            if new_agent_id:
-                # 检查是否被其他员工绑定
-                existing = db.fetch_one(
-                    "SELECT id FROM employees WHERE agent_id = ? AND id != ?",
-                    (new_agent_id, emp_id)
-                )
-                if existing:
-                    return jsonify({'success': False, 'error': '该 Agent 已被其他员工绑定'}), 400
-            update_data['agent_id'] = new_agent_id or None
+        # 处理 Agent 绑定（支持多个）
+        if 'agent_ids' in data:
+            new_agent_ids = data['agent_ids'] or []
+            # 检查是否被其他员工绑定
+            all_employees = db.fetch_all("SELECT id, name, agent_ids FROM employees WHERE agent_ids IS NOT NULL AND id != ?", (emp_id,))
+            for emp in all_employees:
+                try:
+                    bound_ids = json.loads(emp['agent_ids']) if emp['agent_ids'] else []
+                    for aid in new_agent_ids:
+                        if aid in bound_ids:
+                            return jsonify({'success': False, 'error': f'Agent {aid} 已被 {emp["name"]} 绑定'}), 400
+                except:
+                    pass
+            update_data['agent_ids'] = json.dumps(new_agent_ids) if new_agent_ids else None
 
         update_data['updated_at'] = datetime.now().isoformat()
 

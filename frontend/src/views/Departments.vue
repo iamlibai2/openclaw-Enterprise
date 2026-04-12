@@ -97,7 +97,7 @@ import { ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, Edit, Delete, OfficeBuilding, Folder } from '@element-plus/icons-vue'
 import { departmentApi, employeeApi, type Department, type Employee } from '../api'
-import { useUserStore } from '../stores/user'
+import { useUserStore } from '../user/stores'
 import { createFormRules } from '../utils/rules'
 
 const userStore = useUserStore()

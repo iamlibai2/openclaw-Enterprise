@@ -8,6 +8,7 @@
 // 导出组件
 export { default as AgentProfilePage } from './AgentProfile.vue'
 export { default as AgentGalleryPage } from './AgentGallery.vue'
+export { default as CapabilityEditor } from './components/CapabilityEditor.vue'
 
 // 导出类型
 export * from './types'

@@ -138,7 +138,7 @@ import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus'
 import { Plus, View, Edit, Delete, Document } from '@element-plus/icons-vue'
 import { configFileApi, type TemplateParams } from '../api'
 import { createFormRules, sanitizeData } from '../utils/rules'
-import { useUserStore } from '../stores/user'
+import { useUserStore } from '../user/stores'
 
 interface Template {
   id: string

@@ -123,7 +123,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { useUserStore } from '../stores/user'
+import { useUserStore } from '../user/stores'
 import { momentApi, AgentMoment, MomentComment } from '../api'
 import { SSEClient } from '../utils/sse-client'
 import {

@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Optional, Dict, List, Any
 from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime, Text, ForeignKey,
-    create_engine, select, update, delete, insert
+    create_engine, select, update, delete, insert, JSON, Float
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, Session, sessionmaker
@@ -150,7 +150,8 @@ class Employee(Base):
     avatar = Column(String(500))
     department_id = Column(Integer, ForeignKey('departments.id'))
     manager_id = Column(Integer, ForeignKey('employees.id'))
-    agent_id = Column(String(50))
+    agent_ids = Column(Text)  # JSON 数组：["agent1", "agent2"]（绑定关系）
+    agent_config = Column(JSON)  # Agent 能力配置（偏好设置）
     user_id = Column(Integer, ForeignKey('users.id'))
     status = Column(String(20), default='active')
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -207,7 +208,7 @@ class ChannelConfig(Base):
 
 
 class AgentProfile(Base):
-    """Agent 扩展档案表（拟人化属性）"""
+    """Agent 扩展档案表（拟人化属性 + 能力注册）"""
     __tablename__ = 'agent_profiles'
 
     agent_id = Column(String(50), primary_key=True)
@@ -222,6 +223,16 @@ class AgentProfile(Base):
 
     # 扩展属性
     custom_fields = Column(Text)
+
+    # 能力属性（新增 - 用于 Agent 自动选择）
+    capabilities = Column(JSON)    # 能力标签 ["数据分析", "写作", "搜索"]
+    skills = Column(JSON)          # 可执行 Skills ["data-analyzer", "writer"]
+    expertise_level = Column(JSON) # 专业度评分 {"数据分析": 90, "写作": 80}
+
+    # 状态属性（新增 - 用于负载管理）
+    status = Column(String(20), default='idle')  # idle / busy
+    current_tasks = Column(Integer, default=0)
+    success_rate = Column(Float, default=0.95)
 
     # 统计
     total_conversations = Column(Integer, default=0)
@@ -625,6 +636,11 @@ def init_default_data():
                 name='operator',
                 description='运维人员，可管理 Agent 和绑定',
                 permissions='{"agents":["read","write"],"bindings":["read","write"],"tools":["read"],"models":["read"],"status":["read"],"sessions":["read"],"logs":["read"],"config":["read"],"gateway":["start","stop","restart","reload"],"skills":["read","write"],"employees":["read"],"tasks":["read","write"]}'
+            ),
+            Role(
+                name='staff',
+                description='普通员工，只能查看自己绑定的 Agent 和相关数据',
+                permissions='{"agents":["read"],"sessions":["read"],"memories":["read"]}'
             ),
             Role(
                 name='viewer',

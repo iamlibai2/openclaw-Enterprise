@@ -108,7 +108,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { userApi, roleApi, type User, type Role } from '../api'
-import { useUserStore } from '../stores/user'
+import { useUserStore } from '../user/stores'
 import { createFormRules, validateField } from '../utils/rules'
 
 const userStore = useUserStore()

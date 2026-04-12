@@ -53,6 +53,26 @@ export interface ExtendedProfile {
   tags?: string[]
 }
 
+// Agent 能力配置
+export interface AgentCapability {
+  agentId: string
+  name?: string
+
+  // 能力标签
+  capabilities: string[]           // ["数据分析", "写作", "搜索"]
+
+  // 可执行 Skills
+  skills: string[]                 // ["data-analyzer", "writer"]
+
+  // 专业度评分
+  expertiseLevel: Record<string, number>  // {"数据分析": 90, "写作": 80}
+
+  // 状态
+  status: 'idle' | 'busy'          // 当前状态
+  currentTasks: number             // 当前任务数
+  successRate: number              // 成功率 0-1
+}
+
 // 灵魂配置
 export interface SoulConfig {
   content: string

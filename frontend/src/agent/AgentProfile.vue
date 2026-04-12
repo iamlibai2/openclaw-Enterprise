@@ -197,6 +197,50 @@
         </div>
       </div>
 
+      <!-- 能力配置卡片 -->
+      <div class="profile-card">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="card-icon">🎯</span>
+            能力配置
+          </div>
+          <el-button text type="primary" @click="showCapabilityEditor = true">
+            <el-icon><Setting /></el-icon>
+            配置
+          </el-button>
+        </div>
+        <div class="card-content">
+          <div class="capability-preview">
+            <div v-if="capability?.capabilities?.length" class="capabilities-row">
+              <span class="preview-label">能力标签：</span>
+              <el-tag v-for="cap in capability.capabilities.slice(0, 4)" :key="cap" size="small" class="cap-tag">
+                {{ cap }}
+              </el-tag>
+              <el-tag v-if="capability.capabilities.length > 4" size="small" type="info">
+                +{{ capability.capabilities.length - 4 }}
+              </el-tag>
+            </div>
+            <div v-if="capability?.skills?.length" class="skills-row">
+              <span class="preview-label">可执行 Skills：</span>
+              <el-tag v-for="skill in capability.skills.slice(0, 3)" :key="skill" size="small" type="success" class="skill-cap-tag">
+                {{ skill }}
+              </el-tag>
+              <el-tag v-if="capability.skills.length > 3" size="small" type="info">
+                +{{ capability.skills.length - 3 }}
+              </el-tag>
+            </div>
+            <div class="status-row">
+              <span class="preview-label">状态：</span>
+              <el-tag :type="capability?.status === 'idle' ? 'success' : 'warning'" size="small">
+                {{ capability?.status === 'idle' ? '空闲' : '繁忙' }}
+              </el-tag>
+              <span class="status-detail">成功率 {{ ((capability?.successRate || 0.95) * 100).toFixed(0) }}%</span>
+            </div>
+            <el-empty v-if="!capability?.capabilities?.length && !capability?.skills?.length" description="未配置能力" :image-size="40" />
+          </div>
+        </div>
+      </div>
+
       <!-- 工具卡片 -->
       <div class="profile-card">
         <div class="card-header">
@@ -383,6 +427,13 @@
       :profile="profile?.extended"
       @saved="onExtendedSaved"
     />
+
+    <!-- 能力配置编辑器 -->
+    <CapabilityEditor
+      v-model="showCapabilityEditor"
+      :agent-id="agentId"
+      @saved="onCapabilitySaved"
+    />
   </div>
 </template>
 
@@ -392,7 +443,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, Edit, Download, CopyDocument, View, Setting } from '@element-plus/icons-vue'
 import type { AgentProfile } from './types'
-import { getAgentProfile, getExtendedProfile } from './api'
+import { getAgentProfile, getExtendedProfile, getAgentCapability } from './api'
 
 // 子组件
 import IdentityEditor from './components/IdentityEditor.vue'
@@ -403,6 +454,7 @@ import CloneDialog from './components/CloneDialog.vue'
 import ExtendedEditor from './components/ExtendedEditor.vue'
 import ExportDialog from './components/ExportDialog.vue'
 import ToolsEditor from './components/ToolsEditor.vue'
+import CapabilityEditor from './components/CapabilityEditor.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -411,6 +463,7 @@ const router = useRouter()
 const loading = ref(true)
 const error = ref('')
 const profile = ref<AgentProfile | null>(null)
+const capability = ref<any>(null)
 
 // 对话框状态
 const showIdentityEditor = ref(false)
@@ -421,6 +474,7 @@ const showCloneDialog = ref(false)
 const showExportDialog = ref(false)
 const showToolsEditor = ref(false)
 const showExtendedEditor = ref(false)
+const showCapabilityEditor = ref(false)
 
 // 当前 Agent ID
 const agentId = computed(() => route.params.id as string || route.query.id as string)
@@ -460,6 +514,10 @@ async function loadProfile() {
       if (extended) {
         profile.value.extended = extended
       }
+
+      // 加载能力配置
+      const cap = await getAgentCapability(agentId.value)
+      capability.value = cap
     } else {
       error.value = 'Agent 不存在'
     }
@@ -518,6 +576,10 @@ function onToolsSaved() {
 }
 
 function onExtendedSaved() {
+  loadProfile()
+}
+
+function onCapabilitySaved() {
   loadProfile()
 }
 
@@ -828,6 +890,45 @@ onMounted(() => {
   background: #f6ffed;
   border-color: #b7eb8f;
   color: #52c41a;
+}
+
+/* 能力配置预览 */
+.capability-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.capabilities-row,
+.skills-row,
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.preview-label {
+  font-size: 13px;
+  color: #999;
+}
+
+.cap-tag {
+  background: #f0f5ff;
+  border-color: #adc6ff;
+  color: #2f54eb;
+}
+
+.skill-cap-tag {
+  background: #f6ffed;
+  border-color: #b7eb8f;
+  color: #52c41a;
+}
+
+.status-detail {
+  font-size: 12px;
+  color: #666;
+  margin-left: 8px;
 }
 
 /* 响应式 */

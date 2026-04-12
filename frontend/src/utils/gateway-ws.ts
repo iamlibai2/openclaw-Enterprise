@@ -510,11 +510,47 @@ export function handleChatEvent(
 // ==================== 单例管理 ====================
 
 let gatewayClient: GatewayBrowserClient | null = null
+let currentUrl: string | null = null
+let currentToken: string | null = null
 
 export function getGatewayClient(): GatewayBrowserClient | null {
   return gatewayClient
 }
 
+/**
+ * 获取或创建 Gateway 客户端（单例模式）
+ * 如果参数相同则复用现有连接，不会断开
+ */
+export function getOrCreateGatewayClient(opts: {
+  url: string
+  token?: string
+  onHello?: (hello: GatewayHelloOk) => void
+  onEvent?: (evt: GatewayEventFrame) => void
+  onClose?: (info: { code: number; reason: string }) => void
+}): GatewayBrowserClient {
+  // 如果 URL 和 token 相同，复用现有连接
+  if (gatewayClient && currentUrl === opts.url && currentToken === opts.token) {
+    // 更新回调函数
+    const client = gatewayClient as any
+    client.opts = { ...client.opts, ...opts }
+    return gatewayClient
+  }
+
+  // 参数变化，需要创建新连接
+  if (gatewayClient) {
+    gatewayClient.stop()
+  }
+
+  currentUrl = opts.url
+  currentToken = opts.token ?? null
+  gatewayClient = new GatewayBrowserClient(opts)
+  return gatewayClient
+}
+
+/**
+ * 仅创建客户端（不自动停止旧连接）
+ * 用于子组件单独使用
+ */
 export function createGatewayClient(opts: {
   url: string
   token?: string
@@ -522,9 +558,16 @@ export function createGatewayClient(opts: {
   onEvent?: (evt: GatewayEventFrame) => void
   onClose?: (info: { code: number; reason: string }) => void
 }): GatewayBrowserClient {
-  if (gatewayClient) {
-    gatewayClient.stop()
+  // 如果已有相同参数的连接，复用
+  if (gatewayClient && currentUrl === opts.url && currentToken === opts.token) {
+    const client = gatewayClient as any
+    client.opts = { ...client.opts, ...opts }
+    return gatewayClient
   }
+
+  // 创建新连接（不自动停止旧的，让旧连接自然关闭）
+  currentUrl = opts.url
+  currentToken = opts.token ?? null
   gatewayClient = new GatewayBrowserClient(opts)
   return gatewayClient
 }

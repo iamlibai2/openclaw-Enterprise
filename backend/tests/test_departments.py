@@ -222,12 +222,13 @@ class TestEmployeeAgentBinding:
     def test_unbind_agent_success(self, client, admin_token, db_session, test_department):
         """测试解绑 Agent 成功"""
         from database import Employee
+        import json
 
         emp = Employee(
             name='解绑测试员工',
             email='unbind@test.com',
             department_id=test_department.id,
-            agent_id='test_agent',
+            agent_ids=json.dumps(['test_agent']),
             status='active'
         )
         db_session.add(emp)

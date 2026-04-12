@@ -1,11 +1,11 @@
 <template>
   <el-config-provider :locale="zhCn">
-    <!-- 未登录时只显示 router-view（登录页面） -->
-    <template v-if="!userStore.isLoggedIn">
+    <!-- 未登录时或 staff 角色时只显示 router-view -->
+    <template v-if="!userStore.isLoggedIn || isStaff">
       <router-view />
     </template>
 
-    <!-- 已登录时显示完整布局 -->
+    <!-- 已登录时（非 staff）显示完整布局 -->
     <template v-else>
       <div class="app-container">
         <el-container>
@@ -30,23 +30,23 @@
                   <span>工作台</span>
                 </el-menu-item>
 
-                <!-- 消息（Discord 风格） -->
-                <el-menu-item index="/messages" v-if="hasPermission('sessions', 'read')">
-                  <el-icon><ChatDotRound /></el-icon>
-                  <span>消息</span>
-                </el-menu-item>
-
-                <!-- 飞书聊天 -->
+                <!-- 聊天 -->
                 <el-menu-item index="/feishu-chat" v-if="hasPermission('sessions', 'read')">
                   <el-icon><ChatLineRound /></el-icon>
-                  <span>飞书聊天</span>
+                  <span>聊天</span>
                 </el-menu-item>
 
-                <!-- Agent 对话 -->
-                <el-menu-item index="/chat" v-if="hasPermission('sessions', 'read')">
+                <!-- 智能聊天 -->
+                <el-menu-item index="/smart-chat" v-if="hasPermission('sessions', 'read')">
+                  <el-icon><Connection /></el-icon>
+                  <span>智能对话</span>
+                </el-menu-item>
+
+                <!-- Agent 对话（暂时隐藏） -->
+                <!-- <el-menu-item index="/chat" v-if="hasPermission('sessions', 'read')">
                   <el-icon><ChatDotRound /></el-icon>
                   <span>对话</span>
-                </el-menu-item>
+                </el-menu-item> -->
 
                 <!-- Agent 群聊 -->
                 <el-menu-item index="/group-chat" v-if="hasPermission('sessions', 'read')">
@@ -82,6 +82,10 @@
                     <el-icon><Document /></el-icon>
                     <span>工作管理</span>
                   </template>
+                  <el-menu-item index="/workflows">
+                    <el-icon><Share /></el-icon>
+                    <span>工作流编排</span>
+                  </el-menu-item>
                   <el-menu-item index="/tasks">
                     <el-icon><Document /></el-icon>
                     <span>任务列表</span>
@@ -425,10 +429,11 @@ import {
   CircleCloseFilled,
   Loading,
   Tickets,
-  Notebook
+  Notebook,
+  Share
 } from '@element-plus/icons-vue'
-import { useUserStore } from './stores/user'
-import { gatewayApi, authApi, scheduledTaskApi, type TaskExecution } from './api'
+import { useUserStore, userApi } from './user'
+import { gatewayApi, scheduledTaskApi, type TaskExecution } from './api'
 import { getSSEClient, SSEEventTypes } from './utils/sse-client'
 import logoImg from './assets/images/logo.png'
 
@@ -451,6 +456,7 @@ let notificationTimer: ReturnType<typeof setInterval> | null = null
 const NOTIFICATION_INTERVAL = 60000 // 1分钟轮询
 
 const isAdmin = computed(() => userStore.user?.role === 'admin')
+const isStaff = computed(() => userStore.user?.role === 'staff')
 
 // Gateway 状态轮询
 let statusTimer: ReturnType<typeof setInterval> | null = null
@@ -471,8 +477,8 @@ const roleLabel = computed(() => {
 const pageTitle = computed(() => {
   const titles: Record<string, string> = {
     '/dashboard': '团队工作台',
-    '/messages': '消息',
-    '/feishu-chat': '飞书聊天',
+    '/feishu-chat': '聊天',
+    '/smart-chat': '智能对话',
     '/chat': 'Agent 对话',
     '/group-chat': '群聊讨论',
     '/employees': '员工卡片',
@@ -501,7 +507,8 @@ const pageTitle = computed(() => {
     '/security': '安全设置',
     '/users': '用户管理',
     '/model-providers': '系统用模型配置',
-    '/docs': '帮助文档'
+    '/docs': '帮助文档',
+    '/workflows': '工作流编排'
   }
 
   // 动态路由匹配
@@ -590,7 +597,7 @@ const handleChangePassword = async () => {
 
   passwordLoading.value = true
   try {
-    const res = await authApi.changePassword(passwordForm.old_password, passwordForm.new_password)
+    const res = await userApi.changePassword(passwordForm.old_password, passwordForm.new_password)
     if (res.data.success) {
       ElMessage.success('密码已修改')
       passwordDialog.value = false
@@ -607,7 +614,7 @@ const handleChangePassword = async () => {
 const handleLogout = async () => {
   try {
     await ElMessageBox.confirm('确定要退出登录吗？', '提示', { type: 'warning' })
-    await authApi.logout()
+    await userApi.logout()
     userStore.clear()
     ElMessage.success('已退出')
     router.push('/login')
@@ -908,9 +915,10 @@ onUnmounted(() => {
 }
 
 .sidebar-menu .el-menu-item {
-  height: 40px;
-  line-height: 40px;
+  height: 36px;
+  line-height: 36px;
   padding-left: 48px !important;
+  margin: 2px 0;
 }
 
 .sidebar-menu .el-menu-item.is-active {

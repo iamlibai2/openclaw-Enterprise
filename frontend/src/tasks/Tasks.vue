@@ -201,7 +201,7 @@ import { ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus'
 import { Plus, User, Timer, List, VideoPlay, Edit, Delete, Clock } from '@element-plus/icons-vue'
 import { agentApi, scheduledTaskApi, type ScheduledTask, type TaskExecution, type IntervalOption } from '../api'
-import { useUserStore } from '../stores/user'
+import { useUserStore } from '../user/stores'
 
 interface Agent {
   id: string

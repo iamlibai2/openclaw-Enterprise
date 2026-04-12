@@ -31,9 +31,9 @@
           :value="dept.id"
         />
       </el-select>
-      <el-select v-model="filterStatus" placeholder="状态筛选" clearable style="width: 120px">
-        <el-option label="在职" value="active" />
-        <el-option label="离职" value="inactive" />
+      <el-select v-model="filterBinding" placeholder="绑定状态" clearable style="width: 120px">
+        <el-option label="已绑定" value="bound" />
+        <el-option label="未绑定" value="unbound" />
       </el-select>
       <div class="filter-stats">
         <el-tag type="info">{{ filteredEmployees.length }} 人</el-tag>
@@ -46,15 +46,11 @@
         class="employee-card"
         v-for="emp in filteredEmployees"
         :key="emp.id"
-        :class="{ 'inactive': emp.status === 'inactive' }"
       >
         <div class="card-header">
           <el-avatar :size="56" class="employee-avatar">
             {{ emp.name.charAt(0) }}
           </el-avatar>
-          <div class="status-badge" :class="emp.status">
-            {{ emp.status === 'active' ? '在职' : '离职' }}
-          </div>
         </div>
 
         <div class="card-body">
@@ -71,11 +67,14 @@
             <span>上级: {{ emp.manager_name }}</span>
           </div>
 
-          <div class="agent-info" v-if="emp.agent_id">
+          <div class="agent-info" v-if="emp.agent_ids && emp.agent_ids.length">
             <el-icon><Monitor /></el-icon>
             <div class="agent-details">
-              <span class="agent-name">{{ emp.agent_name }}</span>
-              <span class="agent-model" v-if="emp.agent_model">{{ emp.agent_model }}</span>
+              <div class="agent-tags">
+                <el-tag v-for="agent in emp.agents" :key="agent.id" size="small" type="primary" style="margin-right: 4px;">
+                  {{ agent.name }}
+                </el-tag>
+              </div>
             </div>
           </div>
           <div class="agent-info unbound" v-else>
@@ -141,36 +140,98 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item label="Agent" prop="agent_id">
-          <el-select v-model="formData.agent_id" placeholder="绑定 Agent" clearable style="width: 100%">
-            <el-option-group label="未绑定">
-              <el-option
-                v-for="agent in unboundAgents"
-                :key="agent.id"
-                :label="agent.name"
-                :value="agent.id"
-              >
-                <span>{{ agent.name }}</span>
-                <span style="color: #909399; font-size: 12px; margin-left: 8px;">{{ agent.id }}</span>
-              </el-option>
-            </el-option-group>
-            <el-option-group label="已绑定（其他员工）" v-if="boundAgents.length">
-              <el-option
-                v-for="item in boundAgents"
-                :key="item.agent.id"
-                :label="`${item.agent.name} (${item.employee.name})`"
-                :value="item.agent.id"
-                disabled
-              />
-            </el-option-group>
-          </el-select>
+        <el-form-item label="Agents" prop="agent_ids">
+          <div class="agent-selector">
+            <div class="selected-agents" @click="showAgentSelector = true" :class="{ 'all-bound': allAgentsBound && !formData.agent_ids.length }">
+              <template v-if="formData.agent_ids.length">
+                <el-tag v-for="id in formData.agent_ids" :key="id" size="small" closable @close="removeAgent(id)" style="margin: 2px;">
+                  {{ getAgentName(id) }}
+                </el-tag>
+              </template>
+              <template v-else-if="allAgentsBound">
+                <span class="placeholder warning">所有 Agent 已被认领完</span>
+              </template>
+              <span v-else class="placeholder">点击选择 Agent</span>
+            </div>
+            <el-dialog v-model="showAgentSelector" title="选择 Agent" width="500px" append-to-body>
+              <div class="agent-cards">
+                <div
+                  v-for="agent in allAgents"
+                  :key="agent.id"
+                  class="agent-card"
+                  :class="{ selected: formData.agent_ids.includes(agent.id), disabled: agent.bound && !formData.agent_ids.includes(agent.id) }"
+                  @click="toggleAgent(agent.id, agent.bound)"
+                >
+                  <el-checkbox :model-value="formData.agent_ids.includes(agent.id)" @click.stop />
+                  <div class="agent-card-info">
+                    <div class="agent-card-name">{{ agent.name }}</div>
+                    <div class="agent-card-id">{{ agent.id }}</div>
+                    <div class="agent-card-model" v-if="agent.model">{{ agent.model }}</div>
+                  </div>
+                  <el-tag v-if="agent.bound && !formData.agent_ids.includes(agent.id)" size="small" type="info">已绑定</el-tag>
+                </div>
+              </div>
+              <div v-if="allAgentsBound && !formData.agent_ids.length" class="all-bound-tip">
+                <el-icon><Warning /></el-icon>
+                <span>所有 Agent 都已被其他员工认领</span>
+              </div>
+              <template #footer>
+                <el-button @click="showAgentSelector = false">确定</el-button>
+              </template>
+            </el-dialog>
+          </div>
         </el-form-item>
-        <el-form-item label="状态" prop="status" v-if="isEdit">
-          <el-radio-group v-model="formData.status">
-            <el-radio label="active">在职</el-radio>
-            <el-radio label="inactive">离职</el-radio>
-          </el-radio-group>
-        </el-form-item>
+
+        <!-- Agent 配置（仅绑定了 Agent 时显示） -->
+        <el-divider v-if="formData.agent_ids.length" content-position="left">
+          <span style="font-size: 13px; color: #606266;">Agent 配置</span>
+        </el-divider>
+        <div class="agent-config-in-form" v-if="formData.agent_ids.length">
+          <!-- 自主性 -->
+          <div class="config-row">
+            <span class="config-title">
+              自主性级别
+              <el-tooltip content="high: 不需确认就执行；medium: 需确认后执行；low: 每步确认" placement="top">
+                <el-icon class="config-help"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+            <el-radio-group v-model="editAgentConfig.autonomy" size="small">
+              <el-radio-button value="high">高度自主</el-radio-button>
+              <el-radio-button value="medium">中等自主</el-radio-button>
+              <el-radio-button value="low">低自主</el-radio-button>
+            </el-radio-group>
+          </div>
+
+          <!-- 汇报设置 -->
+          <div class="config-row">
+            <span class="config-title">汇报设置</span>
+            <div class="config-inline">
+              <el-select v-model="editAgentConfig.reportStyle.detailLevel" size="small" style="width: 90px">
+                <el-option label="摘要" value="summary" />
+                <el-option label="详细" value="detail" />
+              </el-select>
+              <el-select v-model="editAgentConfig.reportStyle.timing" size="small" style="width: 110px">
+                <el-option label="完成后汇报" value="on_complete" />
+                <el-option label="实时汇报" value="realtime" />
+              </el-select>
+            </div>
+          </div>
+
+          <!-- 学习设置 -->
+          <div class="config-row">
+            <span class="config-title">学习设置</span>
+            <div class="config-inline">
+              <div class="switch-item">
+                <span class="switch-label">记住反馈</span>
+                <el-switch v-model="editAgentConfig.learning.rememberFeedback" size="small" />
+              </div>
+              <div class="switch-item">
+                <span class="switch-label">自动改进</span>
+                <el-switch v-model="editAgentConfig.learning.autoImprove" size="small" />
+              </div>
+            </div>
+          </div>
+        </div>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -207,13 +268,44 @@
             {{ currentEmployee.phone || '-' }}
           </el-descriptions-item>
           <el-descriptions-item label="绑定 Agent">
-            <template v-if="currentEmployee.agent_id">
-              <el-tag type="primary">{{ currentEmployee.agent_name }}</el-tag>
-              <span style="margin-left: 8px; color: #909399; font-size: 12px;">{{ currentEmployee.agent_model }}</span>
+            <template v-if="currentEmployee.agent_ids && currentEmployee.agent_ids.length">
+              <el-tag v-for="agent in currentEmployee.agents" :key="agent.id" type="primary" size="small" style="margin-right: 4px;">
+                {{ agent.name }}
+              </el-tag>
             </template>
             <span v-else style="color: #909399;">未绑定</span>
           </el-descriptions-item>
         </el-descriptions>
+
+        <!-- Agent 配置区域（只展示） -->
+        <el-divider content-position="left" v-if="currentEmployee.agent_ids && currentEmployee.agent_ids.length">
+          <span style="font-size: 13px; color: #606266;">Agent 配置</span>
+        </el-divider>
+
+        <div class="agent-config-card" v-if="currentEmployee.agent_ids && currentEmployee.agent_ids.length && agentConfig">
+          <div class="config-group">
+            <div class="config-group-title">自主性</div>
+            <div class="config-group-value">
+              <el-tag :type="agentConfig.autonomy === 'high' ? 'success' : agentConfig.autonomy === 'medium' ? 'warning' : 'info'" size="small">
+                {{ agentConfig.autonomy === 'high' ? '高度自主' : agentConfig.autonomy === 'medium' ? '中等自主' : '低自主' }}
+              </el-tag>
+            </div>
+          </div>
+          <div class="config-group">
+            <div class="config-group-title">汇报</div>
+            <div class="config-group-value">
+              <span>{{ agentConfig.reportStyle.detailLevel === 'summary' ? '摘要' : '详细' }} · {{ agentConfig.reportStyle.timing === 'on_complete' ? '完成后' : '实时' }}</span>
+            </div>
+          </div>
+          <div class="config-group">
+            <div class="config-group-title">学习</div>
+            <div class="config-group-value">
+              <el-tag v-if="agentConfig.learning.rememberFeedback" type="success" size="small" style="margin-right: 4px">记住反馈</el-tag>
+              <el-tag v-if="agentConfig.learning.autoImprove" type="success" size="small">自动改进</el-tag>
+              <span v-if="!agentConfig.learning.rememberFeedback && !agentConfig.learning.autoImprove" style="color: #909399">未开启</span>
+            </div>
+          </div>
+        </div>
 
         <!-- 绑定渠道信息 -->
         <el-divider content-position="left" v-if="currentEmployee.agent_id">
@@ -267,9 +359,9 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, Search, Edit, View, Delete, User, OfficeBuilding, Monitor, Warning, Link } from '@element-plus/icons-vue'
-import { employeeApi, departmentApi, bindingApi, type Employee, type Department, type UnboundAgent, type BindingConfig } from '../api'
-import { useUserStore } from '../stores/user'
+import { Plus, Search, Edit, View, Delete, User, OfficeBuilding, Monitor, Warning, Link, QuestionFilled, Promotion, Operation, ChatLineSquare } from '@element-plus/icons-vue'
+import { employeeApi, departmentApi, bindingApi, employeeAgentApi, type Employee, type Department, type UnboundAgent, type BindingConfig, type EmployeeAgentConfig } from '../api'
+import { useUserStore } from '../user/stores'
 import { createFormRules } from '../utils/rules'
 
 const router = useRouter()
@@ -283,16 +375,23 @@ const unboundAgents = ref<UnboundAgent[]>([])
 
 const searchKeyword = ref('')
 const filterDepartment = ref<number | null>(null)
-const filterStatus = ref('')
+const filterBinding = ref('')
 
 const dialogVisible = ref(false)
 const detailVisible = ref(false)
+const showAgentSelector = ref(false)
 const isEdit = ref(false)
 const editingId = ref<number | null>(null)
 const formRef = ref<FormInstance>()
 const currentEmployee = ref<Employee | null>(null)
 const subordinates = ref<Employee[]>([])
 const agentBindings = ref<BindingConfig[]>([])
+const agentConfig = ref<EmployeeAgentConfig | null>(null)
+const editAgentConfig = ref<EmployeeAgentConfig>({
+  autonomy: 'high',
+  reportStyle: { detailLevel: 'summary', timing: 'on_complete' },
+  learning: { rememberFeedback: true, autoImprove: true }
+})
 
 const canEdit = computed(() => userStore.hasPermission('employees', 'write'))
 const canDelete = computed(() => userStore.hasPermission('employees', 'delete'))
@@ -303,7 +402,7 @@ const formData = ref({
   phone: '',
   department_id: null as number | null,
   manager_id: null as number | null,
-  agent_id: null as string | null,
+  agent_ids: [] as string[],
   status: 'active'
 })
 
@@ -332,18 +431,49 @@ const flatDepartments = computed(() => {
 // 部门树（用于级联选择）
 const departmentTree = computed(() => departments.value)
 
-// 已绑定的 Agent（用于显示）
-const boundAgents = computed(() => {
-  const result: { agent: { id: string; name: string }; employee: Employee }[] = []
+// 所有 Agent 列表（标记绑定状态）
+const allAgents = computed(() => {
+  const allBoundAgentIds = new Set<string>()
   for (const emp of employees.value) {
-    if (emp.agent_id && emp.id !== editingId.value) {
-      result.push({
-        agent: { id: emp.agent_id, name: emp.agent_name || emp.agent_id },
-        employee: emp
-      })
+    if (emp.agent_ids && emp.id !== editingId.value) {
+      emp.agent_ids.forEach((aid: string) => allBoundAgentIds.add(aid))
     }
   }
-  return result
+  return unboundAgents.value.map(a => ({
+    ...a,
+    bound: allBoundAgentIds.has(a.id),
+    model: a.model?.primary
+  }))
+})
+
+// 获取 Agent 名称
+function getAgentName(id: string) {
+  const agent = allAgents.value.find(a => a.id === id)
+  return agent?.name || id
+}
+
+// 切换 Agent 选择
+function toggleAgent(id: string, bound: boolean) {
+  if (bound) return // 已被其他人绑定，不可选
+  const idx = formData.value.agent_ids.indexOf(id)
+  if (idx > -1) {
+    formData.value.agent_ids.splice(idx, 1)
+  } else {
+    formData.value.agent_ids.push(id)
+  }
+}
+
+// 移除已选 Agent
+function removeAgent(id: string) {
+  const idx = formData.value.agent_ids.indexOf(id)
+  if (idx > -1) {
+    formData.value.agent_ids.splice(idx, 1)
+  }
+}
+
+// 判断是否所有 agent 都已被绑定
+const allAgentsBound = computed(() => {
+  return allAgents.value.length > 0 && allAgents.value.every(a => a.bound)
 })
 
 // 筛选后的员工列表
@@ -362,8 +492,12 @@ const filteredEmployees = computed(() => {
     result = result.filter(e => e.department_id === filterDepartment.value)
   }
 
-  if (filterStatus.value) {
-    result = result.filter(e => e.status === filterStatus.value)
+  if (filterBinding.value) {
+    if (filterBinding.value === 'bound') {
+      result = result.filter(e => e.agent_ids && e.agent_ids.length > 0)
+    } else {
+      result = result.filter(e => !e.agent_ids || e.agent_ids.length === 0)
+    }
   }
 
   return result
@@ -401,13 +535,18 @@ function showCreateDialog() {
     phone: '',
     department_id: null,
     manager_id: null,
-    agent_id: null,
+    agent_ids: [],
     status: 'active'
+  }
+  editAgentConfig.value = {
+    autonomy: 'high',
+    reportStyle: { detailLevel: 'summary', timing: 'on_complete' },
+    learning: { rememberFeedback: true, autoImprove: true }
   }
   dialogVisible.value = true
 }
 
-function showEditDialog(emp: Employee) {
+async function showEditDialog(emp: Employee) {
   isEdit.value = true
   editingId.value = emp.id
   formData.value = {
@@ -416,8 +555,35 @@ function showEditDialog(emp: Employee) {
     phone: emp.phone || '',
     department_id: emp.department_id,
     manager_id: emp.manager_id,
-    agent_id: emp.agent_id,
+    agent_ids: emp.agent_ids || [],
     status: emp.status
+  }
+  // 加载现有 Agent 配置
+  if (emp.agent_ids && emp.agent_ids.length) {
+    try {
+      const res = await employeeAgentApi.getConfig(emp.id)
+      if (res.data.success && res.data.data) {
+        editAgentConfig.value = res.data.data
+      } else {
+        editAgentConfig.value = {
+          autonomy: 'high',
+          reportStyle: { detailLevel: 'summary', timing: 'on_complete' },
+          learning: { rememberFeedback: true, autoImprove: true }
+        }
+      }
+    } catch {
+      editAgentConfig.value = {
+        autonomy: 'high',
+        reportStyle: { detailLevel: 'summary', timing: 'on_complete' },
+        learning: { rememberFeedback: true, autoImprove: true }
+      }
+    }
+  } else {
+    editAgentConfig.value = {
+      autonomy: 'high',
+      reportStyle: { detailLevel: 'summary', timing: 'on_complete' },
+      learning: { rememberFeedback: true, autoImprove: true }
+    }
   }
   dialogVisible.value = true
 }
@@ -426,6 +592,24 @@ async function showDetailDialog(emp: Employee) {
   currentEmployee.value = emp
   detailVisible.value = true
   agentBindings.value = []
+  agentConfig.value = null
+
+  // 加载 Agent 配置
+  if (emp.agent_ids && emp.agent_ids.length) {
+    try {
+      const res = await employeeAgentApi.getConfig(emp.id)
+      if (res.data.success) {
+        agentConfig.value = res.data.data
+      }
+    } catch {
+      // 使用默认配置
+      agentConfig.value = {
+        autonomy: 'high',
+        reportStyle: { detailLevel: 'summary', timing: 'on_complete' },
+        learning: { rememberFeedback: true, autoImprove: true }
+      }
+    }
+  }
 
   // 加载下属
   try {
@@ -438,15 +622,30 @@ async function showDetailDialog(emp: Employee) {
   }
 
   // 加载该员工 Agent 的绑定配置
-  if (emp.agent_id) {
+  if (emp.agent_ids && emp.agent_ids.length) {
     try {
       const res = await bindingApi.list()
       if (res.data.success) {
-        agentBindings.value = res.data.data.filter(b => b.agentId === emp.agent_id)
+        agentBindings.value = res.data.data.filter(b => emp.agent_ids.includes(b.agentId))
       }
     } catch {
       agentBindings.value = []
     }
+  }
+}
+
+async function saveAgentConfig() {
+  if (!currentEmployee.value || !agentConfig.value) return
+
+  try {
+    const res = await employeeAgentApi.updateConfig(currentEmployee.value.id, agentConfig.value)
+    if (res.data.success) {
+      ElMessage.success('配置已保存')
+    } else {
+      ElMessage.error(res.data.error || '保存失败')
+    }
+  } catch (e: any) {
+    ElMessage.error('保存失败：' + e.message)
   }
 }
 
@@ -462,13 +661,17 @@ async function submitForm() {
       phone: formData.value.phone || null,
       department_id: formData.value.department_id,
       manager_id: formData.value.manager_id,
-      agent_id: formData.value.agent_id
+      agent_ids: formData.value.agent_ids
     }
 
     if (isEdit.value) {
       data.status = formData.value.status
       const res = await employeeApi.update(editingId.value!, data)
       if (res.data.success) {
+        // 同时保存 Agent 配置
+        if (formData.value.agent_ids.length) {
+          await employeeAgentApi.updateConfig(editingId.value!, editAgentConfig.value)
+        }
         ElMessage.success('更新成功')
         dialogVisible.value = false
         loadData()
@@ -478,6 +681,10 @@ async function submitForm() {
     } else {
       const res = await employeeApi.create(data)
       if (res.data.success) {
+        // 新建员工后保存 Agent 配置
+        if (formData.value.agent_ids.length && res.data.data?.id) {
+          await employeeAgentApi.updateConfig(res.data.data.id, editAgentConfig.value)
+        }
         ElMessage.success('创建成功')
         dialogVisible.value = false
         loadData()
@@ -566,10 +773,6 @@ onMounted(() => {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
-.employee-card.inactive {
-  opacity: 0.6;
-}
-
 .card-header {
   position: relative;
   padding: 20px 20px 12px;
@@ -583,25 +786,6 @@ onMounted(() => {
   color: #fff;
   font-size: 24px;
   font-weight: 600;
-}
-
-.status-badge {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 12px;
-}
-
-.status-badge.active {
-  background: #f0f9eb;
-  color: #67c23a;
-}
-
-.status-badge.inactive {
-  background: #f4f4f5;
-  color: #909399;
 }
 
 .card-body {
@@ -754,6 +938,94 @@ onMounted(() => {
 }
 
 /* 绑定渠道信息 */
+.agent-config-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 0 12px;
+}
+
+/* Agent 配置（详情抽屉展示） */
+.agent-config-card {
+  background: #f5f7fa;
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 8px;
+}
+
+.config-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.config-group:last-child {
+  border-bottom: none;
+}
+
+.config-group-title {
+  font-size: 13px;
+  color: #909399;
+  font-weight: 500;
+}
+
+.config-group-value {
+  font-size: 14px;
+  color: #303133;
+}
+
+/* Agent 配置（编辑对话框内） */
+.agent-config-in-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 20px;
+  background: #fafafa;
+  border-radius: 8px;
+  margin: 0 0 20px 0;
+}
+
+.config-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.config-title {
+  font-size: 13px;
+  color: #606266;
+  width: 90px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.config-help {
+  color: #909399;
+  font-size: 14px;
+  cursor: help;
+}
+
+.config-inline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.switch-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.switch-label {
+  font-size: 13px;
+  color: #606266;
+}
+
 .bindings-section {
   margin-top: 8px;
 }
@@ -808,5 +1080,105 @@ onMounted(() => {
 .empty-state p {
   margin-top: 16px;
   font-size: 14px;
+}
+
+/* Agent 选择器 */
+.agent-selector {
+  width: 100%;
+}
+
+.selected-agents {
+  min-height: 40px;
+  padding: 6px 12px;
+  border: 1px solid #dcdfe6;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.selected-agents:hover {
+  border-color: #409eff;
+}
+
+.selected-agents .placeholder {
+  color: #a8abb2;
+  font-size: 14px;
+}
+
+.agent-cards {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.agent-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.agent-card:hover:not(.disabled) {
+  border-color: #409eff;
+  background: #f5f7fa;
+}
+
+.agent-card.selected {
+  border-color: #409eff;
+  background: #ecf5ff;
+}
+
+.agent-card.disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.agent-card-info {
+  flex: 1;
+}
+
+.agent-card-name {
+  font-weight: 500;
+  color: #303133;
+}
+
+.agent-card-id {
+  font-size: 12px;
+  color: #909399;
+}
+
+.agent-card-model {
+  font-size: 11px;
+  color: #67c23a;
+}
+
+.selected-agents.all-bound {
+  border-color: #e6a23c;
+  background: #fdf6ec;
+}
+
+.placeholder.warning {
+  color: #e6a23c;
+}
+
+.all-bound-tip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  color: #e6a23c;
+  background: #fdf6ec;
+  border-radius: 8px;
+  margin-top: 12px;
 }
 </style>

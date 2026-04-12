@@ -95,6 +95,10 @@ export const authApi = {
     return api.post('/auth/login', { username, password })
   },
 
+  register(data: { name: string; email: string; password: string; phone?: string }) {
+    return api.post('/auth/register', data)
+  },
+
   logout() {
     return api.post('/auth/logout')
   },
@@ -728,9 +732,11 @@ export interface Employee {
   department_name: string | null
   manager_id: number | null
   manager_name: string | null
-  agent_id: string | null
-  agent_name: string | null
-  agent_model: string | null
+  agent_ids: string[]
+  agents: { id: string; name: string; model?: string }[]
+  agent_id?: string | null  // 兼容旧字段
+  agent_name?: string | null
+  agent_model?: string | null
   user_id: number | null
   status: string
   created_at: string
@@ -1143,6 +1149,92 @@ export const momentApi = {
 
   delete(momentId: number) {
     return api.delete<{ success: boolean }>(`/moments/${momentId}`)
+  }
+}
+
+// ==================== 员工 Agent 配置 API ====================
+export interface EmployeeAgentConfig {
+  autonomy: 'high' | 'medium' | 'low'
+  reportStyle: {
+    detailLevel: 'summary' | 'detail'
+    timing: 'on_complete' | 'realtime'
+  }
+  learning: {
+    rememberFeedback: boolean
+    autoImprove: boolean
+  }
+}
+
+export interface AgentCapability {
+  agentId: string
+  name?: string
+  capabilities: string[]
+  skills: string[]
+  expertiseLevel: Record<string, number>
+  status: 'idle' | 'busy'
+  currentTasks: number
+  successRate: number
+}
+
+export const employeeAgentApi = {
+  // 获取员工绑定的 Agent 列表
+  getBoundAgents(employeeId: number) {
+    return api.get<{ success: boolean; data: { agentIds: string[]; agents: { id: string; name: string; status: string; skills: string[] }[] } }>(`/employee-agent/${employeeId}/agents`)
+  },
+
+  // 绑定 Agent
+  bindAgent(employeeId: number, agentId: string) {
+    return api.post<BaseResponse>(`/employee-agent/${employeeId}/agents`, { agentId })
+  },
+
+  // 解绑 Agent
+  unbindAgent(employeeId: number, agentId: string) {
+    return api.delete<BaseResponse>(`/employee-agent/${employeeId}/agents/${agentId}`)
+  },
+
+  // 获取 Agent 配置
+  getConfig(employeeId: number) {
+    return api.get<{ success: boolean; data: EmployeeAgentConfig }>(`/employee-agent/${employeeId}/config`)
+  },
+
+  // 更新 Agent 配置
+  updateConfig(employeeId: number, config: EmployeeAgentConfig) {
+    return api.put<BaseResponse>(`/employee-agent/${employeeId}/config`, config)
+  },
+
+  // 设置自主性级别
+  setAutonomy(employeeId: number, autonomy: 'high' | 'medium' | 'low') {
+    return api.put<BaseResponse>(`/employee-agent/${employeeId}/autonomy`, { autonomy })
+  },
+
+  // 获取 Agent 能力信息
+  getAgentCapability(agentId: string) {
+    return api.get<{ success: boolean; data: AgentCapability }>(`/employee-agent/agents/${agentId}/capability`)
+  },
+
+  // 注册 Agent 能力
+  registerAgentCapability(agentId: string, data: { capabilities: string[]; skills: string[]; expertiseLevel: Record<string, number> }) {
+    return api.put<BaseResponse>(`/employee-agent/agents/${agentId}/capability`, data)
+  },
+
+  // 查询具有指定能力的 Agent
+  queryAgentsByCapability(capability: string, status?: string) {
+    return api.get<{ success: boolean; data: AgentCapability[] }>(`/employee-agent/agents/capability/${capability}`, { params: { status } })
+  },
+
+  // 为工作流节点选择 Agent
+  selectAgentForWorkflow(employeeId: number, data: { requiredCapability: string; requiredSkill?: string; preferBound?: boolean }) {
+    return api.post<{ success: boolean; data: { agentId: string | null; reason: string } }>(`/employee-agent/${employeeId}/select-agent`, data)
+  },
+
+  // 全局选择最优 Agent
+  selectBestAgent(data: { requiredCapability: string; requiredSkill?: string }) {
+    return api.post<{ success: boolean; data: { agentId: string | null; capability?: AgentCapability; reason?: string } }>(`/employee-agent/select-best-agent`, data)
+  },
+
+  // 获取员工工作流历史
+  getWorkflowHistory(employeeId: number, limit: number = 20) {
+    return api.get<{ success: boolean; data: { id: number; workflowName: string; status: string; agentId: string; createdAt: string }[] }>(`/employee-agent/${employeeId}/workflow-history`, { params: { limit } })
   }
 }
 

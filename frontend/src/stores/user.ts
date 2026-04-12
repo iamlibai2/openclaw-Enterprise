@@ -1,12 +1,23 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
+export interface EmployeeInfo {
+  id: number
+  name: string
+  agent_id: string | null
+  department_id: number | null
+  department_name: string | null
+}
+
 export interface UserInfo {
   id: number
   username: string
   display_name: string
+  email?: string
   role: string
   permissions: Record<string, string[]>
+  last_login?: string
+  employee?: EmployeeInfo
 }
 
 export const useUserStore = defineStore('user', () => {
@@ -17,6 +28,9 @@ export const useUserStore = defineStore('user', () => {
   const isLoggedIn = computed(() => !!user.value && !!accessToken.value)
   const isAdmin = computed(() => user.value?.role === 'admin')
   const isOperator = computed(() => user.value?.role === 'operator' || user.value?.role === 'admin')
+  const isStaff = computed(() => user.value?.role === 'staff')
+  const employee = computed(() => user.value?.employee)
+  const boundAgentId = computed(() => user.value?.employee?.agent_id)
 
   function setUser(userInfo: UserInfo) {
     user.value = userInfo
@@ -80,6 +94,9 @@ export const useUserStore = defineStore('user', () => {
     isLoggedIn,
     isAdmin,
     isOperator,
+    isStaff,
+    employee,
+    boundAgentId,
     setUser,
     setTokens,
     setLoginData,

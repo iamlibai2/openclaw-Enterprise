@@ -249,7 +249,7 @@ import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus'
 import { Plus, View, Edit, Delete, Document, Folder, Search, ArrowDown } from '@element-plus/icons-vue'
 import { skillApi } from '../api'
 import { createFormRules, sanitizeData } from '../utils/rules'
-import { useUserStore } from '../stores/user'
+import { useUserStore } from '../user/stores'
 import { marked } from 'marked'
 
 interface Skill {
